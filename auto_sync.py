@@ -317,19 +317,80 @@ def _check_upcoming_lineups(upcoming: list[dict]) -> None:
             _lineup_checked.add(fid)
 
 
+def update_elo_after_match(home_team: str, away_team: str,
+                           home_goals: int, away_goals: int,
+                           stage: str = "group") -> None:
+    """
+    Update Elo ratings after a finished match.
+
+    K-factor: 40 for knockout rounds (higher variance), 32 for group stage.
+    Formula:
+      expected = 1 / (1 + 10^((opponent_elo - team_elo) / 400))
+      delta    = K * (result - expected)
+      result   = 1.0 win / 0.5 draw / 0.0 loss
+
+    Ratings are persisted to team_ratings.json immediately.
+    """
+    try:
+        from mundial_2026 import update_elo_rating, TEAM_RATINGS
+    except ImportError:
+        log.error("update_elo_after_match: could not import mundial_2026")
+        return
+
+    if home_team not in TEAM_RATINGS or away_team not in TEAM_RATINGS:
+        log.warning("Elo update skipped: unknown team(s) %s / %s", home_team, away_team)
+        return
+
+    k = 40 if stage in ("r32", "r16", "qf", "sf", "final", "3rd") else 32
+
+    is_draw = home_goals == away_goals
+    if is_draw:
+        winner, loser = home_team, away_team
+    elif home_goals > away_goals:
+        winner, loser = home_team, away_team
+    else:
+        winner, loser = away_team, home_team
+
+    old_w = TEAM_RATINGS[winner]
+    old_l = TEAM_RATINGS[loser]
+    delta_w, delta_l = update_elo_rating(winner, loser, is_draw=is_draw, k=k)
+
+    sign  = "=" if is_draw else "def"
+    score = f"{home_goals}–{away_goals}"
+    log.info(
+        "Elo Update: %s %.0f→%.0f (%+.0f)  %s  %s %.0f→%.0f (%+.0f)",
+        winner, old_w, old_w + delta_w, delta_w,
+        sign,
+        loser,  old_l, old_l + delta_l, delta_l,
+    )
+    _notify(
+        f"📈 <b>Elo Update</b>  {score}\n"
+        f"  {winner}: {old_w:.0f} → {old_w + delta_w:.0f} ({delta_w:+.0f})\n"
+        f"  {loser}:  {old_l:.0f} → {old_l + delta_l:.0f} ({delta_l:+.0f})"
+    )
+
+
 def _check_finished_matches(upcoming: list[dict]) -> None:
-    """Detect matches that just finished and log (result update is manual via bot)."""
+    """Detect matches that just finished; update Elo and notify."""
     for fix in upcoming:
         fid    = fix["fixture_id"]
         status = fix.get("status", "NS")
         if status in ("FT", "AET", "PEN") and fid not in _known_fixture_ids:
             _known_fixture_ids.add(fid)
-            hs = fix.get("home_score", "?")
-            as_ = fix.get("away_score", "?")
+            hs  = fix.get("home_score")
+            as_ = fix.get("away_score")
+            hs_str  = str(hs)  if hs  is not None else "?"
+            as_str  = str(as_) if as_ is not None else "?"
             _notify(
-                f"🏁 Partido finalizado: <b>{fix['home']} {hs}–{as_} {fix['away']}</b>\n"
+                f"🏁 Partido finalizado: <b>{fix['home']} {hs_str}–{as_str} {fix['away']}</b>\n"
                 f"Registra el resultado con el botón Actualizar en el bot."
             )
+            # Auto-update Elo if we have a clean result
+            if hs is not None and as_ is not None:
+                update_elo_after_match(
+                    fix["home"], fix["away"], int(hs), int(as_),
+                    stage=fix.get("stage", "group"),
+                )
 
 
 # ── main sync loop ────────────────────────────────────────────────────────────

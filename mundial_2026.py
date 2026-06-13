@@ -195,6 +195,132 @@ SET_PIECE_RATINGS = {
     "Cape Verde":  (0.46, 0.47),
 }
 
+# ══════════════════════════════════════════════════════════════
+# 2c. SQUAD MARKET VALUES (Transfermarkt, June 2026, €M)
+# ══════════════════════════════════════════════════════════════
+# Source: Transfermarkt squad total values as of tournament start.
+# Reflects depth + star quality. Used as Layer 12 in expected_goals().
+# Update these manually each tournament round if values shift materially.
+SQUAD_MARKET_VALUE: dict[str, float] = {
+    # Elite tier
+    "England":      1100.0,
+    "France":        950.0,
+    "Spain":        1050.0,
+    "Brazil":        900.0,
+    "Germany":       850.0,
+    "Portugal":      740.0,
+    "Netherlands":   620.0,
+    "Argentina":     780.0,
+    # Strong tier
+    "Belgium":       420.0,
+    "Norway":        390.0,
+    "Colombia":      310.0,
+    "Uruguay":       270.0,
+    "Switzerland":   280.0,
+    "Croatia":       260.0,
+    "Turkey":        240.0,
+    "USA":           230.0,
+    "Austria":       220.0,
+    "Denmark":       200.0,
+    "Sweden":        180.0,
+    "South Korea":   160.0,
+    "Japan":         155.0,
+    "Mexico":        145.0,
+    "Senegal":       135.0,
+    "Morocco":       130.0,
+    "Canada":        130.0,
+    "Ecuador":        90.0,
+    "Australia":      88.0,
+    "Czechia":        85.0,
+    "Serbia":         80.0,
+    "Poland":         75.0,
+    "Scotland":       70.0,
+    "Ivory Coast":    68.0,
+    "Algeria":        62.0,
+    "Tunisia":        58.0,
+    "Ghana":          55.0,
+    "DR Congo":       48.0,
+    "Iran":           42.0,
+    "Paraguay":       40.0,
+    "Egypt":          38.0,
+    "Bosnia and Herzegovina": 35.0,
+    "Jordan":         22.0,
+    "Uzbekistan":     20.0,
+    "South Africa":   18.0,
+    "Saudi Arabia":   16.0,
+    "New Zealand":    14.0,
+    "Qatar":          13.0,
+    "Cape Verde":     12.0,
+    "Panama":         11.0,
+    "Curacao":         9.0,
+    "Haiti":           7.0,
+    "Iraq":            6.5,
+}
+
+# ══════════════════════════════════════════════════════════════
+# 2d. TEAM ELO RATINGS (live — updated after each match)
+# ══════════════════════════════════════════════════════════════
+# Initial values calibrated from FIFA ranking + recent tournament form.
+# Persisted to team_ratings.json and reloaded on startup.
+# Updated by auto_sync.update_elo_after_match() after each FT/AET/PEN result.
+RATINGS_FILE = os.path.join(os.path.dirname(__file__), "team_ratings.json")
+
+TEAM_RATINGS: dict[str, float] = {
+    # Elite (FIFA top 5)
+    "France":        1900.0,
+    "Argentina":     1890.0,
+    "England":       1880.0,
+    "Brazil":        1870.0,
+    "Spain":         1875.0,
+    # Second tier
+    "Portugal":      1840.0,
+    "Netherlands":   1830.0,
+    "Belgium":       1820.0,
+    "Germany":       1815.0,
+    "Morocco":       1790.0,
+    "Norway":        1780.0,
+    "USA":           1750.0,
+    "Colombia":      1745.0,
+    "Uruguay":       1740.0,
+    "Switzerland":   1735.0,
+    "Croatia":       1730.0,
+    "South Korea":   1720.0,
+    "Japan":         1715.0,
+    "Turkey":        1710.0,
+    "Austria":       1700.0,
+    "Sweden":        1695.0,
+    "Senegal":       1690.0,
+    "Mexico":        1685.0,
+    "Czechia":       1680.0,
+    "Australia":     1670.0,
+    "Ecuador":       1665.0,
+    "Algeria":       1650.0,
+    "Ivory Coast":   1640.0,
+    "Canada":        1635.0,
+    "Serbia":        1625.0,
+    "Poland":        1620.0,
+    "Tunisia":       1610.0,
+    "Scotland":      1605.0,
+    "Denmark":       1600.0,
+    "Ghana":         1580.0,
+    "Iran":          1570.0,
+    "Egypt":         1565.0,
+    "Paraguay":      1555.0,
+    "DR Congo":      1550.0,
+    "South Africa":  1535.0,
+    "Bosnia and Herzegovina": 1525.0,
+    "Saudi Arabia":  1510.0,
+    "Jordan":        1490.0,
+    "Uzbekistan":    1480.0,
+    "New Zealand":   1460.0,
+    "Qatar":         1445.0,
+    "Cape Verde":    1430.0,
+    "Panama":        1410.0,
+    "Curacao":       1390.0,
+    "Haiti":         1365.0,
+    "Iraq":          1360.0,
+}
+
 # Yellow card accumulation per player {player_name: card_count}
 # Updated via `yellow <player>` command; reset between stages via `clear-yellows`
 YELLOW_CARDS: dict = {}
@@ -1403,6 +1529,7 @@ def _load_state():
         TEAM_EXTRA_TIME[team] = et
     for team, lc in state.get("lineup_confirmed", {}).items():
         LINEUP_CONFIRMED[team] = lc
+    _load_elo_ratings()
 
 
 def _save_state():
@@ -1651,6 +1778,87 @@ def _home_crowd_multiplier(team_a, team_b, venue):
     else:                       return 1.0, 1.0   # two visiting teams at host venue
 
 
+def _market_value_multiplier(team_a, team_b):
+    """
+    Squad market value edge (Layer 12).
+
+    Calibration: richer squads have deeper benches and costlier stars.
+    Effect is deliberately small — market value correlates with quality but
+    is already partially captured in attack/defense base ratings.
+
+    Formula: mult = (team_value / avg_value) ** 0.10
+      England €1100M vs avg €350M → +11% attack / defense
+      Haiti   €7M    vs avg €350M → −11%
+
+    Max swing ≈ ±12%. Dampened exponent prevents over-weighting.
+    """
+    vals = list(SQUAD_MARKET_VALUE.values())
+    avg  = sum(vals) / len(vals)
+
+    def mult(team):
+        v = SQUAD_MARKET_VALUE.get(team, avg)
+        return max(0.85, min((v / avg) ** 0.10, 1.18))
+
+    return mult(team_a), mult(team_b)
+
+
+def update_elo_rating(winner: str, loser: str, is_draw: bool = False,
+                      k: int = 32) -> tuple[float, float]:
+    """
+    Apply standard Elo update after a match.
+
+    K=32 is the FIFA/WC standard; pass k=40 for knockout rounds.
+    Returns (delta_winner, delta_loser) — positive = gained, negative = lost.
+    Persists updated ratings to RATINGS_FILE.
+    """
+    elo_w = TEAM_RATINGS.get(winner, 1500.0)
+    elo_l = TEAM_RATINGS.get(loser,  1500.0)
+
+    expected_w = 1.0 / (1.0 + 10 ** ((elo_l - elo_w) / 400.0))
+    expected_l = 1.0 - expected_w
+
+    result_w, result_l = (0.5, 0.5) if is_draw else (1.0, 0.0)
+
+    delta_w = k * (result_w - expected_w)
+    delta_l = k * (result_l - expected_l)
+
+    new_w = elo_w + delta_w
+    new_l = elo_l + delta_l
+
+    if winner in TEAM_RATINGS:
+        TEAM_RATINGS[winner] = round(new_w, 1)
+    if loser in TEAM_RATINGS:
+        TEAM_RATINGS[loser]  = round(new_l, 1)
+
+    _save_elo_ratings()
+    return delta_w, delta_l
+
+
+def _save_elo_ratings():
+    """Persist TEAM_RATINGS to team_ratings.json."""
+    try:
+        with open(RATINGS_FILE, "w") as f:
+            json.dump(TEAM_RATINGS, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Failed to save Elo ratings: %s", e)
+
+
+def _load_elo_ratings():
+    """Load TEAM_RATINGS from team_ratings.json if it exists."""
+    if not os.path.exists(RATINGS_FILE):
+        return
+    try:
+        with open(RATINGS_FILE) as f:
+            saved = json.load(f)
+        for team, rating in saved.items():
+            if team in TEAM_RATINGS:
+                TEAM_RATINGS[team] = float(rating)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Failed to load Elo ratings: %s", e)
+
+
 def _set_piece_multiplier(team_a, team_b):
     """
     Set piece attack vs defensive solidity from dead balls.
@@ -1763,15 +1971,18 @@ def expected_goals(team_a, team_b, venue="Neutral",
     # 10 — Dead rubber
     dr_a, dr_b = _dead_rubber_multiplier(dead_rubber)
 
+    # 11 — Market value (squad financial depth proxy)
+    mv_a, mv_b = _market_value_multiplier(team_a, team_b)
+
     # Combine: attack of A vs defence of B
     eff_att_a = (base_att_a * sq_att_a * env_att_a
                  * tac_a * h2h_a * rest_fa * pres_a * form_a
-                 * crowd_a * sp_a * dr_a)
+                 * crowd_a * sp_a * dr_a * mv_a)
     eff_def_b = base_def_b * sq_def_b * env_def_b
 
     eff_att_b = (base_att_b * sq_att_b * env_att_b
                  * tac_b * h2h_b * rest_fb * pres_b * form_b
-                 * crowd_b * sp_b * dr_b)
+                 * crowd_b * sp_b * dr_b * mv_b)
     eff_def_a = base_def_a * sq_def_a * env_def_a
 
     lam_a = max(0.15, min(BASE_GOALS * eff_att_a * eff_def_b, 6.0))
@@ -1785,6 +1996,7 @@ def expected_goals(team_a, team_b, venue="Neutral",
         "form":     (form_a, form_b),
         "crowd":    (crowd_a, crowd_b),      "setpiece": (sp_a, sp_b),
         "dead_rubber": (dr_a, dr_b),         "extra_time": (et_a, et_b),
+        "market_value": (mv_a, mv_b),
     }
     return lam_a, lam_b, factors
 

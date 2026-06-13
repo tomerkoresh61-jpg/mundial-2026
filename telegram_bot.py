@@ -107,6 +107,8 @@ def kb_match(team_a, team_b, venue, stage):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📖 למה התוצאה הזאת?",
                               callback_data=f"why||{key}")],
+        [InlineKeyboardButton("🔍 השווה מודלים",
+                              callback_data=f"compare||{key}")],
         [InlineKeyboardButton("📋 הרכב אושר — שניהם",
                               callback_data=f"lineup||{team_a}||{team_b}")],
         [InlineKeyboardButton("🔙 תפריט ראשי", callback_data="main")],
@@ -370,6 +372,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"  מנוחה:     {a} {pct(rm_a)} | {b} {pct(rm_b)}\n\n"
             f"🎯 xG: *{a} {lam_a:.2f} — {lam_b:.2f} {b}*"
         )
+        back_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 חזרה לתחזית",
+                                 callback_data=f"match||{a}||{b}||{venue}||{stage}")
+        ]])
+        await _edit(query, text, back_kb)
+        return
+
+    # ── Model comparison ───────────────────────────────────────
+    if data.startswith("compare||"):
+        _, a, b, venue, stage = data.split("||")
+        try:
+            from prediction_comparison import compare_match, format_comparison_table
+            result = compare_match(a, b, venue=venue, stage=stage)
+            text   = format_comparison_table(result)
+        except Exception as e:
+            log.error("compare_match failed: %s", e)
+            text = f"❌ שגיאה בהשוואת מודלים: {e}"
         back_kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🔙 חזרה לתחזית",
                                  callback_data=f"match||{a}||{b}||{venue}||{stage}")
