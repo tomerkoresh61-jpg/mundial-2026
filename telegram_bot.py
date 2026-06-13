@@ -485,37 +485,65 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _show_upcoming(query, days: int):
-    """Fetch upcoming fixtures and show as inline buttons."""
+    """Fetch upcoming fixtures, predict each, and send all cards in one message."""
     try:
         from auto_sync import get_upcoming_fixtures
         fixtures = get_upcoming_fixtures(days)
     except Exception:
         fixtures = []
 
+    no_matches_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⚽ חיזוי ספציפי", callback_data="pick_group"),
+        InlineKeyboardButton("🔙 חזרה",         callback_data="main"),
+    ]])
+
     if not fixtures:
         await _edit(query,
                     f"לא נמצאו משחקים ב-{days} הימים הקרובים.\n"
                     f"(ייתכן שה-API אינו מוגדר — נסה חיזוי ספציפי בדרך הידנית)",
-                    InlineKeyboardMarkup([[
-                        InlineKeyboardButton("⚽ חיזוי ספציפי", callback_data="pick_group"),
-                        InlineKeyboardButton("🔙 חזרה",         callback_data="main"),
-                    ]]))
+                    no_matches_kb)
         return
 
-    rows = []
-    now = datetime.now(timezone.utc)
-    for f in fixtures[:12]:
-        hours = (f["kickoff"] - now).total_seconds() / 3600
-        conf_e, _ = confidence_info(f["home"], f["away"], hours)
-        label = (f"{conf_e} {f['home']} 🆚 {f['away']}  "
-                 f"{f['date_str']}")
-        cdata = (f"match||{f['home']}||{f['away']}||"
-                 f"{f['venue']}||{f['stage']}")
-        rows.append([InlineKeyboardButton(label, callback_data=cdata)])
+    label_map = {1: "24 שעות", 3: "3 ימים", 7: "שבוע"}
+    range_label = label_map.get(days, f"{days} ימים")
 
-    rows.append([InlineKeyboardButton("🔙 תפריט ראשי", callback_data="main")])
-    await _edit(query, f"📅 *משחקים ב-{days} הימים הקרובים:*",
-                InlineKeyboardMarkup(rows))
+    now = datetime.now(timezone.utc)
+    mdl._load_state()
+
+    cards = []
+    for f in fixtures[:12]:
+        hours    = (f["kickoff"] - now).total_seconds() / 3600
+        date_str = f["kickoff"].strftime("%d/%m %H:%M UTC")
+        try:
+            card_text, _ = build_match_card(
+                f["home"], f["away"], f["venue"], f["stage"],
+                match_time=date_str, hours_to_ko=hours
+            )
+            cards.append(card_text)
+        except Exception as e:
+            log.warning("Card build failed %s vs %s: %s", f["home"], f["away"], e)
+            cards.append(f"⚠️ שגיאה בחיזוי: *{f['home']}* 🆚 *{f['away']}*")
+
+    SEP      = "\n\n" + "━" * 28 + "\n\n"
+    header   = f"📅 *משחקים ב-{range_label}* — {len(cards)} משחקים\n"
+    MAX_LEN  = 4000
+
+    # Build the message, truncating if it would exceed Telegram's limit
+    body_parts = []
+    for i, card in enumerate(cards):
+        chunk = (SEP if i > 0 else "\n\n") + card
+        if len(header) + len("".join(body_parts)) + len(chunk) > MAX_LEN:
+            remaining = len(cards) - i
+            body_parts.append(f"\n\n_...ועוד {remaining} משחקים (טווח קצר יותר לפרטים)_")
+            break
+        body_parts.append(chunk)
+
+    full_text = header + "".join(body_parts)
+
+    back_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔙 תפריט ראשי", callback_data="main")
+    ]])
+    await _edit(query, full_text, back_kb)
 
 
 async def _show_changelog(query):
