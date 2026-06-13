@@ -10,6 +10,7 @@ Also exports get_upcoming_fixtures() used by _show_upcoming().
 """
 
 import os
+import json
 import time
 import logging
 import unicodedata
@@ -32,6 +33,7 @@ LIVE_POLL_SEC  = 60         # poll live fixtures every 60 s
 IDLE_POLL_SEC  = 300        # poll upcoming fixtures every 5 min when no live game
 LINEUP_WINDOW  = 90         # minutes before KO to start polling for lineups
 API_BASE       = "https://v3.football.api-sports.io"
+FIXTURES_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_fixtures.json")
 
 # ── shared state (imported by mundial_2026 functions) ─────────────────────────
 # Populated by this module; telegram_bot reads these for display.
@@ -106,64 +108,115 @@ def _notify(text: str) -> None:
 
 # ── fixture fetching ──────────────────────────────────────────────────────────
 
-def get_upcoming_fixtures(days: int = 1) -> list[dict]:
+def _load_hardcoded_fixtures() -> list[dict]:
     """
-    Return a list of upcoming fixtures within `days` days.
-    Each dict has keys: fixture_id, home, away, venue, stage, kickoff (datetime UTC),
-                        status, home_score, away_score.
+    Load all fixtures from wc2026_fixtures.json (offline fallback schedule).
+    Returns them in the same dict shape as the API path.
     """
-    now   = datetime.now(timezone.utc)
-    until = now + timedelta(days=days)
-    date_from = now.strftime("%Y-%m-%d")
-    date_to   = until.strftime("%Y-%m-%d")
-
-    data = _get("fixtures", {
-        "league": LEAGUE_ID,
-        "season": SEASON,
-        "from":   date_from,
-        "to":     date_to,
-        "timezone": "UTC",
-    })
-    if not data:
+    if not os.path.exists(FIXTURES_FILE):
+        log.warning("wc2026_fixtures.json not found at %s", FIXTURES_FILE)
+        return []
+    try:
+        with open(FIXTURES_FILE) as f:
+            raw = json.load(f)
+    except Exception as e:
+        log.error("Failed to read wc2026_fixtures.json: %s", e)
         return []
 
     result = []
-    for item in data.get("response", []):
-        fix  = item.get("fixture", {})
-        teams = item.get("teams", {})
-        venue = item.get("fixture", {}).get("venue", {}).get("name", "Neutral")
-        goals = item.get("goals", {})
-        score = item.get("score", {})
-        ko_str = fix.get("date", "")
+    for item in raw:
+        ko_str = item.get("kickoff", "")
         try:
-            ko = datetime.fromisoformat(ko_str.replace("Z", "+00:00"))
+            ko = datetime.fromisoformat(ko_str)
         except Exception:
-            ko = now
-
-        league_round = item.get("league", {}).get("round", "")
-        stage = "group"
-        lr = league_round.lower()
-        if "round of 32"  in lr: stage = "r32"
-        elif "round of 16" in lr: stage = "r16"
-        elif "quarter"     in lr: stage = "qf"
-        elif "semi"        in lr: stage = "sf"
-        elif "final"       in lr: stage = "final"
-        elif "third"       in lr: stage = "3rd"
-
+            continue
         result.append({
-            "fixture_id":  fix.get("id"),
-            "home":        teams.get("home", {}).get("name", "?"),
-            "away":        teams.get("away", {}).get("name", "?"),
-            "venue":       venue,
-            "stage":       stage,
-            "kickoff":     ko,
-            "status":      fix.get("status", {}).get("short", "NS"),
-            "home_score":  goals.get("home"),
-            "away_score":  goals.get("away"),
-            "elapsed":     fix.get("status", {}).get("elapsed"),
+            "fixture_id": item.get("fixture_id"),
+            "home":       item.get("home", "TBD"),
+            "away":       item.get("away", "TBD"),
+            "venue":      item.get("venue", "Neutral"),
+            "stage":      item.get("stage", "group"),
+            "kickoff":    ko,
+            "status":     item.get("status", "NS"),
+            "home_score": item.get("home_score"),
+            "away_score": item.get("away_score"),
+            "elapsed":    None,
+            "source":     "hardcoded",
         })
     result.sort(key=lambda x: x["kickoff"])
+    log.debug("Loaded %d hardcoded fixtures from wc2026_fixtures.json", len(result))
     return result
+
+
+def get_upcoming_fixtures(days: int = 1) -> list[dict]:
+    """
+    Return upcoming fixtures within `days` days from now.
+
+    Priority:
+      1. api-football.com (live data, requires paid plan for 2026 season)
+      2. wc2026_fixtures.json (hardcoded fallback — always available)
+
+    Each returned dict has keys:
+      fixture_id, home, away, venue, stage, kickoff (datetime UTC),
+      status, home_score, away_score, elapsed, [source]
+    """
+    now   = datetime.now(timezone.utc)
+    until = now + timedelta(days=days)
+
+    # ── 1. Try the API ────────────────────────────────────────
+    api_result = None
+    if API_KEY:
+        data = _get("fixtures", {
+            "league":   LEAGUE_ID,
+            "season":   SEASON,
+            "from":     now.strftime("%Y-%m-%d"),
+            "to":       until.strftime("%Y-%m-%d"),
+            "timezone": "UTC",
+        })
+        if data and not data.get("errors") and data.get("response"):
+            api_result = []
+            for item in data["response"]:
+                fix    = item.get("fixture", {})
+                teams  = item.get("teams", {})
+                venue  = fix.get("venue", {}).get("name", "Neutral")
+                goals  = item.get("goals", {})
+                ko_str = fix.get("date", "")
+                try:
+                    ko = datetime.fromisoformat(ko_str.replace("Z", "+00:00"))
+                except Exception:
+                    ko = now
+
+                lr    = item.get("league", {}).get("round", "").lower()
+                stage = "group"
+                if "round of 32"  in lr: stage = "r32"
+                elif "round of 16" in lr: stage = "r16"
+                elif "quarter"     in lr: stage = "qf"
+                elif "semi"        in lr: stage = "sf"
+                elif "final"       in lr: stage = "final"
+                elif "third"       in lr: stage = "3rd"
+
+                api_result.append({
+                    "fixture_id": fix.get("id"),
+                    "home":       teams.get("home", {}).get("name", "?"),
+                    "away":       teams.get("away", {}).get("name", "?"),
+                    "venue":      venue,
+                    "stage":      stage,
+                    "kickoff":    ko,
+                    "status":     fix.get("status", {}).get("short", "NS"),
+                    "home_score": goals.get("home"),
+                    "away_score": goals.get("away"),
+                    "elapsed":    fix.get("status", {}).get("elapsed"),
+                    "source":     "api",
+                })
+            api_result.sort(key=lambda x: x["kickoff"])
+
+    if api_result:
+        return api_result
+
+    # ── 2. Fallback: hardcoded schedule ───────────────────────
+    log.info("API unavailable or no data — using hardcoded wc2026_fixtures.json")
+    all_fixtures = _load_hardcoded_fixtures()
+    return [f for f in all_fixtures if now <= f["kickoff"] <= until]
 
 
 def _get_live_fixture_ids() -> list[int]:
@@ -403,17 +456,32 @@ def run_sync_loop() -> None:
     """
     log.info("Sync loop starting (league=%s season=%s)", LEAGUE_ID, SEASON)
     if not API_KEY:
-        log.error("API_FOOTBALL_KEY not set — sync loop disabled")
-        return
+        log.warning("API_FOOTBALL_KEY not set — live event sync disabled; "
+                    "upcoming fixtures served from wc2026_fixtures.json")
+        # Still run the idle loop so _check_finished_matches / lineups fire
+        # against the hardcoded schedule (status updates need manual bot input).
+        while True:
+            try:
+                upcoming = get_upcoming_fixtures(days=2)
+                _check_upcoming_lineups(upcoming)
+                _check_finished_matches(upcoming)
+            except Exception as exc:
+                log.error("Idle loop error: %s", exc)
+            time.sleep(IDLE_POLL_SEC)
+        return  # unreachable but explicit
 
-    # Quick check: verify the API plan supports this season
+    # Quick check: verify the API plan supports this season for fixture queries.
+    # NOTE: Even if /fixtures is blocked, /fixtures?live=all may still work,
+    # and upcoming fixtures fall back to wc2026_fixtures.json — so we do NOT
+    # kill the loop on a plan error, we just note it and carry on.
     test = _get("fixtures", {"league": LEAGUE_ID, "season": SEASON, "next": 1})
     if test and test.get("errors"):
         err = str(test["errors"])
         if "plan" in err.lower() or "season" in err.lower():
-            log.warning("api-football free plan does not cover season %s yet. "
-                        "Auto-sync disabled until the plan is upgraded or the season unlocks.", SEASON)
-            return
+            log.warning("api-football plan does not cover season %s for fixture queries. "
+                        "Upcoming schedule served from wc2026_fixtures.json. "
+                        "Live event polling (/fixtures?live=all) will still be attempted.",
+                        SEASON)
 
     while True:
         try:
@@ -421,15 +489,17 @@ def run_sync_loop() -> None:
 
             if live_ids:
                 _live_fixture_ids.update(live_ids)
+                # Build a lookup from our upcoming fixtures (hardcoded IDs: 10001+).
+                # Live API IDs (real fixture IDs) won't match hardcoded ones, so
+                # we fall through to the direct fetch — that's intentional.
+                upcoming = get_upcoming_fixtures(days=1)
+                fix_map  = {f["fixture_id"]: f for f in upcoming}
                 for fid in live_ids:
-                    # We need home/away names — fetch from upcoming cache
-                    upcoming = get_upcoming_fixtures(days=1)
-                    fix_map  = {f["fixture_id"]: f for f in upcoming}
                     if fid in fix_map:
                         f = fix_map[fid]
                         _process_events(fid, f["home"], f["away"])
                     else:
-                        # Fetch directly
+                        # API fixture ID not in hardcoded schedule — fetch names directly.
                         data = _get("fixtures", {"id": fid})
                         if data and data.get("response"):
                             item = data["response"][0]

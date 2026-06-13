@@ -2,3 +2,4 @@
 __pycache__/
 *.json
 !team_ratings.json
+!wc2026_fixtures.json
