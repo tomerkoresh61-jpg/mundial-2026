@@ -93,6 +93,8 @@ VENUES = {
     "Lincoln":      {"city": "Philadelphia",   "altitude_m": 11,   "temp_c": 25, "humidity": 0.67},
     "HardRock":     {"city": "Miami",          "altitude_m": 2,    "temp_c": 33, "humidity": 0.82},
     "Lumen":        {"city": "Seattle",        "altitude_m": 17,   "temp_c": 19, "humidity": 0.72},
+    "NRG":          {"city": "Houston",        "altitude_m": 15,   "temp_c": 33, "humidity": 0.78},
+    "Mercedes":     {"city": "Atlanta",        "altitude_m": 315,  "temp_c": 28, "humidity": 0.65},
     # ── Canada ─────────────────────────────────────────────
     "BMO":          {"city": "Toronto",        "altitude_m": 76,   "temp_c": 23, "humidity": 0.68},
     "BCPlace":      {"city": "Vancouver",      "altitude_m": 4,    "temp_c": 18, "humidity": 0.72},
@@ -134,6 +136,7 @@ VENUE_HOME_NATION = {
     "MetLife": "USA", "ATT": "USA", "SoFi": "USA", "RoseBowl": "USA",
     "Levis": "USA", "Arrowhead": "USA", "Gillette": "USA",
     "Lincoln": "USA", "HardRock": "USA", "Lumen": "USA",
+    "NRG": "USA", "Mercedes": "USA",
     "BMO": "Canada", "BCPlace": "Canada",
 }
 
