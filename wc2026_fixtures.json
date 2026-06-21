@@ -8,7 +8,9 @@
     "venue": "Azteca",
     "group": "A",
     "matchday": 1,
-    "status": "FT"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 0
   },
   {
     "fixture_id": 10002,
@@ -19,7 +21,9 @@
     "venue": "Akron",
     "group": "A",
     "matchday": 1,
-    "status": "FT"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 1
   },
   {
     "fixture_id": 10003,
@@ -30,7 +34,9 @@
     "venue": "BMO",
     "group": "B",
     "matchday": 1,
-    "status": "FT"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10004,
@@ -41,7 +47,9 @@
     "venue": "SoFi",
     "group": "D",
     "matchday": 1,
-    "status": "FT"
+    "status": "FT",
+    "home_score": 4,
+    "away_score": 1
   },
   {
     "fixture_id": 10005,
@@ -52,7 +60,9 @@
     "venue": "Levis",
     "group": "B",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10006,
@@ -63,7 +73,9 @@
     "venue": "MetLife",
     "group": "C",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10007,
@@ -74,7 +86,9 @@
     "venue": "Gillette",
     "group": "C",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 0,
+    "away_score": 1
   },
   {
     "fixture_id": 10008,
@@ -85,7 +99,9 @@
     "venue": "BCPlace",
     "group": "D",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 0
   },
   {
     "fixture_id": 10009,
