@@ -40,6 +40,7 @@ import json
 import sys
 import os
 import itertools
+import unicodedata
 from collections import Counter, defaultdict
 
 # ─────────────────────────────────────────────────────────────
@@ -2655,19 +2656,67 @@ def find_team(name):
     print(f"  ❌ Team '{name}' not found.")
     return None
 
-def find_player(name):
-    nl = name.lower()
-    results = []
-    for team, tdata in TEAMS.items():
-        for player in tdata["players"]:
-            if nl in player.lower():
-                results.append(player)
-    if not results: print(f"  ❌ Player '{name}' not found."); return None
-    if len(results) == 1: return results[0]
-    exact = [r for r in results if r.lower() == nl]
-    if len(exact) == 1: return exact[0]
-    print(f"  ⚠️  Matches: {results}")
-    return None
+def _strip_accents(s: str) -> str:
+    """Lower-case and remove diacritics: 'Itō' -> 'ito', 'Mbappé' -> 'mbappe'."""
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+
+
+def find_player(name, quiet=False):
+    """
+    Resolve an external/abbreviated player name to a model player.
+
+    Matching is accent-insensitive and tries, in order:
+      1. exact full-name match            ("Cristiano Ronaldo")
+      2. abbreviated first name + surname  ("K. Mbappé"  -> "Kylian Mbappe")
+      3. unique surname match              ("Doan"       -> "Ritsu Doan")
+      4. unique substring match            ("Messi"      -> "Lionel Messi")
+    Returns the model name, or None if there is no unique match.
+    """
+    candidates = [p for tdata in TEAMS.values() for p in tdata["players"]]
+    norm = {p: _strip_accents(p) for p in candidates}
+    q = _strip_accents(name)
+
+    def fail():
+        if not quiet:
+            print(f"  ❌ Player '{name}' not found.")
+        return None
+
+    if not q:
+        return fail()
+
+    # 1. exact full-name (accent-insensitive)
+    exact = [p for p in candidates if norm[p] == q]
+    if len(exact) == 1:
+        return exact[0]
+
+    q_tokens = q.replace(".", " ").split()
+
+    # 2. abbreviated first name: "R. Doan" / "R Doan" -> initial + surname
+    if len(q_tokens) >= 2 and len(q_tokens[0]) == 1:
+        initial = q_tokens[0]
+        surname = " ".join(q_tokens[1:])
+        abbr = [p for p in candidates
+                if norm[p].split()[0][:1] == initial
+                and norm[p].split()[-1] == surname]
+        if len(abbr) == 1:
+            return abbr[0]
+
+    # 3. unique surname match (last token of the query == last token of a name)
+    surname = q_tokens[-1]
+    surname_hits = [p for p in candidates if norm[p].split()[-1] == surname]
+    if len(surname_hits) == 1:
+        return surname_hits[0]
+
+    # 4. unique substring match (preserves prior CLI behaviour)
+    subs = [p for p in candidates if q in norm[p]]
+    if len(subs) == 1:
+        return subs[0]
+    if len(subs) > 1 and not quiet:
+        print(f"  ⚠️  Matches: {subs}")
+        return None
+
+    return fail()
 
 
 # ══════════════════════════════════════════════════════════════

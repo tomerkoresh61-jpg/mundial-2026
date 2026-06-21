@@ -112,7 +112,9 @@
     "venue": "NRG",
     "group": "E",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 7,
+    "away_score": 1
   },
   {
     "fixture_id": 10010,
@@ -123,7 +125,9 @@
     "venue": "ATT",
     "group": "F",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 2
   },
   {
     "fixture_id": 10011,
@@ -134,7 +138,9 @@
     "venue": "Lincoln",
     "group": "E",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 0
   },
   {
     "fixture_id": 10012,
@@ -145,7 +151,9 @@
     "venue": "BBVA",
     "group": "F",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 5,
+    "away_score": 1
   },
   {
     "fixture_id": 10013,
@@ -156,7 +164,9 @@
     "venue": "Mercedes",
     "group": "H",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 0,
+    "away_score": 0
   },
   {
     "fixture_id": 10014,
@@ -167,7 +177,9 @@
     "venue": "Lumen",
     "group": "G",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10015,
@@ -178,7 +190,9 @@
     "venue": "HardRock",
     "group": "H",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10016,
@@ -189,7 +203,9 @@
     "venue": "SoFi",
     "group": "G",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 2
   },
   {
     "fixture_id": 10017,
@@ -200,7 +216,9 @@
     "venue": "MetLife",
     "group": "I",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 3,
+    "away_score": 1
   },
   {
     "fixture_id": 10018,
@@ -211,7 +229,9 @@
     "venue": "Gillette",
     "group": "I",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 4
   },
   {
     "fixture_id": 10019,
@@ -222,7 +242,9 @@
     "venue": "Arrowhead",
     "group": "J",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 3,
+    "away_score": 0
   },
   {
     "fixture_id": 10020,
@@ -233,7 +255,9 @@
     "venue": "Levis",
     "group": "J",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 3,
+    "away_score": 1
   },
   {
     "fixture_id": 10021,
@@ -244,7 +268,9 @@
     "venue": "NRG",
     "group": "K",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10022,
@@ -255,7 +281,9 @@
     "venue": "ATT",
     "group": "L",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 4,
+    "away_score": 2
   },
   {
     "fixture_id": 10023,
@@ -266,7 +294,9 @@
     "venue": "BMO",
     "group": "L",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 0
   },
   {
     "fixture_id": 10024,
@@ -277,7 +307,9 @@
     "venue": "Azteca",
     "group": "K",
     "matchday": 1,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 3
   },
   {
     "fixture_id": 10025,
@@ -288,7 +320,9 @@
     "venue": "Mercedes",
     "group": "A",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 1
   },
   {
     "fixture_id": 10026,
@@ -299,7 +333,9 @@
     "venue": "SoFi",
     "group": "B",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 4,
+    "away_score": 1
   },
   {
     "fixture_id": 10027,
@@ -310,7 +346,9 @@
     "venue": "BCPlace",
     "group": "B",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 6,
+    "away_score": 0
   },
   {
     "fixture_id": 10028,
@@ -321,7 +359,9 @@
     "venue": "Akron",
     "group": "A",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 1,
+    "away_score": 0
   },
   {
     "fixture_id": 10029,
@@ -332,7 +372,9 @@
     "venue": "Lumen",
     "group": "D",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 0
   },
   {
     "fixture_id": 10030,
@@ -343,7 +385,9 @@
     "venue": "Gillette",
     "group": "C",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 0,
+    "away_score": 1
   },
   {
     "fixture_id": 10031,
@@ -354,7 +398,9 @@
     "venue": "Lincoln",
     "group": "C",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 3,
+    "away_score": 0
   },
   {
     "fixture_id": 10032,
@@ -365,7 +411,9 @@
     "venue": "Levis",
     "group": "D",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 0,
+    "away_score": 1
   },
   {
     "fixture_id": 10033,
@@ -376,7 +424,9 @@
     "venue": "NRG",
     "group": "F",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 5,
+    "away_score": 1
   },
   {
     "fixture_id": 10034,
@@ -387,7 +437,9 @@
     "venue": "BMO",
     "group": "E",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 2,
+    "away_score": 1
   },
   {
     "fixture_id": 10035,
@@ -398,7 +450,9 @@
     "venue": "Arrowhead",
     "group": "E",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 0,
+    "away_score": 0
   },
   {
     "fixture_id": 10036,
@@ -409,7 +463,9 @@
     "venue": "BBVA",
     "group": "F",
     "matchday": 2,
-    "status": "NS"
+    "status": "FT",
+    "home_score": 0,
+    "away_score": 4
   },
   {
     "fixture_id": 10037,

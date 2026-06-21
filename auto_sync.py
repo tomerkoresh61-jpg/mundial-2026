@@ -72,12 +72,33 @@ def _norm(s: str) -> str:
     return " ".join(ascii_.lower().split())
 
 
+# api-football uses some country names that differ from our model's names.
+# These are checked (accent/case-insensitively) before the fuzzy fallback.
+TEAM_ALIASES = {
+    "korea republic":     "South Korea",
+    "south korea":        "South Korea",
+    "cape verde islands": "Cape Verde",
+    "ir iran":            "Iran",
+    "iran":               "Iran",
+    "czech republic":     "Czechia",
+    "congo dr":           "DR Congo",
+    "dr congo":           "DR Congo",
+    "united states":      "USA",
+    "cote d'ivoire":      "Ivory Coast",
+    "côte d'ivoire":      "Ivory Coast",
+}
+
+
 def _fuzzy_team(api_name: str, known_teams: list[str]) -> Optional[str]:
     norm_api = _norm(api_name)
     norm_map = {_norm(t): t for t in known_teams}
     # exact
     if norm_api in norm_map:
         return norm_map[norm_api]
+    # explicit alias map (handles known api-football spellings)
+    alias = TEAM_ALIASES.get(norm_api)
+    if alias and alias in known_teams:
+        return alias
     # close
     matches = difflib.get_close_matches(norm_api, norm_map.keys(), n=1, cutoff=0.75)
     return norm_map[matches[0]] if matches else None
@@ -87,7 +108,7 @@ def _fuzzy_player(api_name: str) -> Optional[str]:
     """Match api name against players known to mundial_2026."""
     try:
         from mundial_2026 import find_player
-        return find_player(api_name)
+        return find_player(api_name, quiet=True)
     except Exception:
         return None
 
