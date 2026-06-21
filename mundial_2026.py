@@ -2055,6 +2055,9 @@ def predict_match(team_a, team_b, venue="Neutral",
                   rest_a=4, rest_b=4, stage="group", dead_rubber=None,
                   verbose=True, top_n=10):
 
+    # Resolve accented / aliased names (e.g. "Curaçao" -> "Curacao")
+    if team_a not in TEAMS: team_a = find_team(team_a, quiet=True) or team_a
+    if team_b not in TEAMS: team_b = find_team(team_b, quiet=True) or team_b
     if team_a not in TEAMS or team_b not in TEAMS:
         print(f"  ❌ Unknown team(s). Check spelling.")
         return None
@@ -2644,16 +2647,38 @@ def bonus_predictions():
 # 16. FUZZY TEAM / PLAYER LOOKUP
 # ══════════════════════════════════════════════════════════════
 
-def find_team(name):
-    nl = name.lower()
-    for t in TEAMS:
-        if t.lower() == nl: return t
-    matches = [t for t in TEAMS if nl in t.lower()]
+# Canonical names for api-football / external spellings that differ from ours.
+# Keys are accent-stripped + lower-cased (see _strip_accents).
+TEAM_NAME_ALIASES = {
+    "korea republic":     "South Korea",
+    "cape verde islands": "Cape Verde",
+    "cabo verde":         "Cape Verde",
+    "ir iran":            "Iran",
+    "congo dr":           "DR Congo",
+    "czech republic":     "Czechia",
+    "united states":      "USA",
+    "cote d'ivoire":      "Ivory Coast",
+}
+
+
+def find_team(name, quiet=False):
+    """Resolve a (possibly accented / aliased) team name to a model team."""
+    nl = _strip_accents(name)
+    norm = {_strip_accents(t): t for t in TEAMS}
+    # exact (accent-insensitive)
+    if nl in norm:
+        return norm[nl]
+    # explicit alias (handles "Cape Verde Islands", "Korea Republic", etc.)
+    alias = TEAM_NAME_ALIASES.get(nl)
+    if alias and alias in TEAMS:
+        return alias
+    # substring fallback (accent-insensitive)
+    matches = [orig for n, orig in norm.items() if nl in n]
     if len(matches) == 1: return matches[0]
     if len(matches) > 1:
-        print(f"  ⚠️  Ambiguous: {matches}")
+        if not quiet: print(f"  ⚠️  Ambiguous: {matches}")
         return None
-    print(f"  ❌ Team '{name}' not found.")
+    if not quiet: print(f"  ❌ Team '{name}' not found.")
     return None
 
 def _strip_accents(s: str) -> str:

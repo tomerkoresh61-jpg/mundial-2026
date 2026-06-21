@@ -224,6 +224,10 @@ def build_match_card(team_a: str, team_b: str,
                      match_time: str = "",
                      hours_to_ko: float = 999) -> tuple[str, InlineKeyboardMarkup]:
     mdl._load_state()
+    # Resolve accented / aliased API names to model names (e.g. "Curaçao",
+    # "Cape Verde Islands") before any TEAMS lookups.
+    team_a = mdl.find_team(team_a, quiet=True) or team_a
+    team_b = mdl.find_team(team_b, quiet=True) or team_b
     lam_a, lam_b, factors = mdl.expected_goals(team_a, team_b, venue, stage=stage)
     P    = mdl.score_matrix(lam_a, lam_b)
     w, d, l = mdl.wdl(P)
@@ -510,6 +514,11 @@ async def _show_upcoming(query, days: int):
         fixtures = get_upcoming_fixtures(days)
     except Exception:
         fixtures = []
+
+    # Only show matches that have not started — drop finished/live/postponed
+    # (FT/AET/PEN/1H/HT/2H/PST...) so e.g. an already-played Tunisia vs Japan
+    # does not appear in "upcoming".
+    fixtures = [f for f in fixtures if f.get("status", "NS") == "NS"]
 
     no_matches_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("⚽ חיזוי ספציפי", callback_data="pick_group"),
