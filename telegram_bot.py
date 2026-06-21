@@ -538,15 +538,39 @@ async def _show_upcoming(query, days: int):
     now = datetime.now(timezone.utc)
     mdl._load_state()
 
+    LINEUP_FETCH_WINDOW = 30  # minutes before KO to force a fresh lineup fetch
+
     cards = []
     for f in fixtures[:12]:
         hours    = (f["kickoff"] - now).total_seconds() / 3600
+        mins     = hours * 60
         date_str = f["kickoff"].strftime("%d/%m %H:%M UTC")
+
+        # Within 30 min of kickoff, force a fresh lineup fetch right now (run the
+        # blocking HTTP call off the event loop). Needs the real api-football
+        # fixture id — the hardcoded fallback schedule uses synthetic ids that
+        # can't be queried, so we only do this when source == "api".
+        if 0 <= mins <= LINEUP_FETCH_WINDOW and f.get("source") == "api":
+            try:
+                from auto_sync import sync_lineups
+                await asyncio.get_event_loop().run_in_executor(
+                    None, sync_lineups, f["fixture_id"])
+            except Exception as e:
+                log.warning("On-demand lineup fetch failed for %s vs %s: %s",
+                            f["home"], f["away"], e)
+
         try:
             card_text, _ = build_match_card(
                 f["home"], f["away"], f["venue"], f["stage"],
                 match_time=date_str, hours_to_ko=hours
             )
+            # Near kickoff, surface lineup-confirmation status per team.
+            if 0 <= mins <= LINEUP_FETCH_WINDOW:
+                ta = mdl.find_team(f["home"], quiet=True) or f["home"]
+                tb = mdl.find_team(f["away"], quiet=True) or f["away"]
+                sa = "✅ הרכבים אושרו" if mdl.LINEUP_CONFIRMED.get(ta) else "⏳ טרם"
+                sb = "✅ הרכבים אושרו" if mdl.LINEUP_CONFIRMED.get(tb) else "⏳ טרם"
+                card_text += f"\n📋 {f['home']}: {sa}  |  {f['away']}: {sb}"
             cards.append(card_text)
         except Exception as e:
             log.warning("Card build failed %s vs %s: %s", f["home"], f["away"], e)

@@ -266,8 +266,8 @@ def _get_fixture_lineups(fixture_id: int) -> list[dict]:
 
 def _known_teams() -> list[str]:
     try:
-        from mundial_2026 import BASE_SQUAD
-        return list(BASE_SQUAD.keys())
+        from mundial_2026 import TEAMS
+        return list(TEAMS.keys())
     except Exception:
         return []
 
@@ -333,14 +333,21 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
                 log.info("AET detected: %s vs %s", home_api, away_api)
 
 
-def _process_lineups(fixture_id: int) -> None:
-    """Sync confirmed lineups into mundial_2026 LINEUP_CONFIRMED."""
-    from mundial_2026 import LINEUP_CONFIRMED, injure_player, find_player, BASE_SQUAD
+def _process_lineups(fixture_id: int) -> bool:
+    """
+    Sync confirmed lineups into mundial_2026 LINEUP_CONFIRMED.
+
+    Returns True if at least one side's lineup was confirmed, False otherwise
+    (e.g. lineups not yet published). Callers use this to decide whether the
+    fixture has been fully handled or should be retried later.
+    """
+    from mundial_2026 import LINEUP_CONFIRMED, injure_player, find_player, TEAMS
 
     lineups = _get_fixture_lineups(fixture_id)
     if not lineups:
-        return
+        return False
 
+    confirmed_any = False
     teams = _known_teams()
     for side in lineups:
         api_team = side.get("team", {}).get("name", "")
@@ -353,14 +360,15 @@ def _process_lineups(fixture_id: int) -> None:
 
         # Mark lineup as confirmed
         LINEUP_CONFIRMED[team] = True
+        confirmed_any = True
 
         # Cross-check: squad players not in starting XI or bench = absent
-        if team in BASE_SQUAD:
-            known = set(BASE_SQUAD[team].keys())
+        if team in TEAMS:
+            known = set(TEAMS[team]["players"].keys())
             all_api_players = set(starters + bench)
             resolved_present = set()
             for api_p in all_api_players:
-                r = find_player(api_p)
+                r = find_player(api_p, quiet=True)
                 if r:
                     resolved_present.add(r)
             for known_p in known:
@@ -377,6 +385,21 @@ def _process_lineups(fixture_id: int) -> None:
             _notify(f"📋 <b>Alineación confirmada — {team}</b>\n{starters_str}")
             log.info("Lineup synced for %s", team)
 
+    return confirmed_any
+
+
+def sync_lineups(fixture_id: int) -> bool:
+    """
+    On-demand lineup fetch (used by the bot just before kickoff, and safe to
+    call from any thread). Wraps _process_lineups with error handling so a
+    failed network call never breaks the caller. Returns True if confirmed.
+    """
+    try:
+        return _process_lineups(fixture_id)
+    except Exception as exc:
+        log.warning("sync_lineups failed for %s: %s", fixture_id, exc)
+        return False
+
 
 def _check_upcoming_lineups(upcoming: list[dict]) -> None:
     """For fixtures starting within LINEUP_WINDOW minutes, poll for lineups."""
@@ -387,8 +410,10 @@ def _check_upcoming_lineups(upcoming: list[dict]) -> None:
             continue
         mins_to_ko = (fix["kickoff"] - now).total_seconds() / 60
         if 0 <= mins_to_ko <= LINEUP_WINDOW:
-            _process_lineups(fid)
-            _lineup_checked.add(fid)
+            # Only mark as handled once a lineup is actually confirmed; otherwise
+            # retry on the next poll (lineups may not be published yet).
+            if _process_lineups(fid):
+                _lineup_checked.add(fid)
 
 
 def update_elo_after_match(home_team: str, away_team: str,
