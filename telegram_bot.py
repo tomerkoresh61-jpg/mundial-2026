@@ -16,9 +16,19 @@
 """
 
 import os, sys, asyncio, logging, json, threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 load_dotenv()
+
+# Kickoff times from the API/JSON are stored in UTC, but the bot's audience is
+# in Israel — so display local time. Fall back to a fixed +3 offset only if the
+# IANA tz database is unavailable on the host.
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("Asia/Jerusalem")
+except Exception:
+    LOCAL_TZ = timezone(timedelta(hours=3))
+LOCAL_TZ_LABEL = "שעון ישראל"
 
 from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
                       BotCommand)
@@ -232,6 +242,12 @@ def build_match_card(team_a: str, team_b: str,
     P    = mdl.score_matrix(lam_a, lam_b)
     w, d, l = mdl.wdl(P)
 
+    knockout = mdl.is_knockout(stage)
+    if knockout:
+        p_adv_a, p_adv_b = mdl._advancement_probs(team_a, team_b, lam_a, lam_b, w, d, l)
+    else:
+        p_adv_a = p_adv_b = None
+
     scores = sorted(
         [(i, j, P[i, j]) for i in range(P.shape[0]) for j in range(P.shape[1])],
         key=lambda x: -x[2]
@@ -249,7 +265,13 @@ def build_match_card(team_a: str, team_b: str,
             if outcome == 'b'    and b_g > a_g: return (a_g, b_g, prob)
         return scores[0]
 
-    if w >= 0.40 and w >= l:
+    if knockout:
+        # Single-elimination: no draw pick — recommend who advances (incl. ET + pens).
+        if p_adv_a >= p_adv_b:
+            tp = _best_for('a'); tp_label = f"{team_a} מעפילה ({p_adv_a*100:.0f}%)"
+        else:
+            tp = _best_for('b'); tp_label = f"{team_b} מעפילה ({p_adv_b*100:.0f}%)"
+    elif w >= 0.40 and w >= l:
         tp = _best_for('a'); tp_label = f"ניצחון {team_a}"
     elif l >= 0.40 and l > w:
         tp = _best_for('b'); tp_label = f"ניצחון {team_b}"
@@ -273,6 +295,14 @@ def build_match_card(team_a: str, team_b: str,
     time_str = f" | {match_time}" if match_time else ""
     city = mdl.VENUES.get(venue, {}).get("city", venue)
 
+    if knockout:
+        wdl_line = (
+            f"אחרי 90′: {team_a} {w*100:.0f}% / תיקו {d*100:.0f}% / {team_b} {l*100:.0f}%\n"
+            f"🏆 העפלה: {team_a} *{p_adv_a*100:.0f}%* · {team_b} *{p_adv_b*100:.0f}%*"
+        )
+    else:
+        wdl_line = f"🎯 {team_a} *{w*100:.0f}%* | תיקו *{d*100:.0f}%* | {team_b} *{l*100:.0f}%*"
+
     text = (
         f"{conf_emoji} _{conf_text}_\n\n"
         f"⚽ *{team_a}* 🆚 *{team_b}*\n"
@@ -281,7 +311,7 @@ def build_match_card(team_a: str, team_b: str,
         f"🏆 *המלצת טורניר: {team_a} {tp[0]}–{tp[1]} {team_b}*  _({tp_label})_\n"
         f"💡 תוצאה הכי סבירה: {team_a} {best[0]}–{best[1]} {team_b} ({best[2]*100:.1f}%)\n"
         f"{'─'*28}\n"
-        f"🎯 {team_a} *{w*100:.0f}%* | תיקו *{d*100:.0f}%* | {team_b} *{l*100:.0f}%*\n"
+        f"{wdl_line}\n"
         f"📊 {top3}"
     )
 
@@ -544,7 +574,7 @@ async def _show_upcoming(query, days: int):
     for f in fixtures[:12]:
         hours    = (f["kickoff"] - now).total_seconds() / 3600
         mins     = hours * 60
-        date_str = f["kickoff"].strftime("%d/%m %H:%M UTC")
+        date_str = f["kickoff"].astimezone(LOCAL_TZ).strftime("%d/%m %H:%M") + f" ({LOCAL_TZ_LABEL})"
 
         # Within 30 min of kickoff, force a fresh lineup fetch right now (run the
         # blocking HTTP call off the event loop). Needs the real api-football

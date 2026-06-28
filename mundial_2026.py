@@ -1727,9 +1727,10 @@ def _pressure_multiplier(team_a, team_b, stage="group"):
     stage: "group", "r32", "r16", "qf", "sf", "final"
     High pressure_index teams improve; low pressure_index teams may freeze.
     """
+    stage = (stage or "group").lower()
     stage_pressure = {
         "group": 0.5, "r32": 0.7, "r16": 0.85,
-        "qf": 1.0, "sf": 1.15, "final": 1.3
+        "qf": 1.0, "sf": 1.15, "3rd": 1.15, "final": 1.3
     }
     p = stage_pressure.get(stage, 0.5)
 
@@ -1936,6 +1937,7 @@ def expected_goals(team_a, team_b, venue="Neutral",
      10. Set pieces           — dead-ball attack vs defence (new)
      11. Dead rubber          — squad rotation penalty (new)
     """
+    stage = (stage or "group").lower()
     base_att_a = TEAMS[team_a]["attack"]
     base_def_a = TEAMS[team_a]["defense"]
     base_att_b = TEAMS[team_b]["attack"]
@@ -2038,6 +2040,38 @@ def wdl(P):
     return w, d, l
 
 
+# Single-elimination stages: a draw after 90' cannot be a final result — it is
+# resolved by extra time then penalties.
+KNOCKOUT_STAGES = {"r32", "r16", "qf", "sf", "3rd", "final"}
+
+
+def is_knockout(stage) -> bool:
+    return (stage or "group").lower() in KNOCKOUT_STAGES
+
+
+def _advancement_probs(team_a, team_b, lam_a, lam_b, w90, d90, l90):
+    """
+    Probability each side ADVANCES from a knockout tie, reusing the same
+    extra-time + penalty model as _sim_match (analytic version):
+
+      • Extra time: goals at ~33% of the 90' rate (Dixon-Coles matrix).
+      • Penalties : attack × pressure_index weighting, clipped to [0.35, 0.65].
+
+    P(A advances) = W90 + D90 · ( W_et + D_et · p_pen_A )
+    Returns (p_adv_a, p_adv_b), which sum to 1.0.
+    """
+    P_et = score_matrix(lam_a * 0.33, lam_b * 0.33)
+    w_et, d_et, l_et = wdl(P_et)
+
+    qi = TEAMS[team_a]["attack"] * TEAMS[team_a]["pressure_index"]
+    qj = TEAMS[team_b]["attack"] * TEAMS[team_b]["pressure_index"]
+    p_pen_a = float(np.clip(0.50 + (qi - qj) / (qi + qj) * 0.18, 0.35, 0.65))
+
+    p_adv_a = w90 + d90 * (w_et + d_et * p_pen_a)
+    p_adv_b = l90 + d90 * (l_et + d_et * (1 - p_pen_a))
+    return p_adv_a, p_adv_b
+
+
 # ══════════════════════════════════════════════════════════════
 # 11. PREDICTION OUTPUT
 # ══════════════════════════════════════════════════════════════
@@ -2062,18 +2096,34 @@ def predict_match(team_a, team_b, venue="Neutral",
         print(f"  ❌ Unknown team(s). Check spelling.")
         return None
 
+    stage = (stage or "group").lower()
+    knockout = is_knockout(stage)
+
     lam_a, lam_b, factors = expected_goals(team_a, team_b, venue, rest_a, rest_b, stage, dead_rubber)
     P = score_matrix(lam_a, lam_b)
     w, d, l = wdl(P)
+
+    # Knockout ties resolve via extra time + penalties -> advancement %.
+    if knockout:
+        p_adv_a, p_adv_b = _advancement_probs(team_a, team_b, lam_a, lam_b, w, d, l)
+    else:
+        p_adv_a = p_adv_b = None
 
     scores = sorted(
         [(i, j, P[i,j]) for i in range(P.shape[0]) for j in range(P.shape[1])],
         key=lambda x: -x[2]
     )
 
+    def _result_payload(top):
+        return {"lam_a": lam_a, "lam_b": lam_b,
+                "win_a": w, "draw": d, "win_b": l,
+                "w90": w, "d90": d, "l90": l,
+                "p_adv_home": p_adv_a, "p_adv_away": p_adv_b,
+                "knockout": knockout, "stage": stage,
+                "top_scores": top, "matrix": P}
+
     if not verbose:
-        return {"lam_a": lam_a, "lam_b": lam_b, "win_a": w, "draw": d, "win_b": l,
-                "top_scores": scores[:top_n], "matrix": P}
+        return _result_payload(scores[:top_n])
 
     W = 68
     grp_a = TEAM_TO_GROUP.get(team_a, "?")
@@ -2086,6 +2136,8 @@ def predict_match(team_a, team_b, venue="Neutral",
     print(f"     Venue: {VENUES[venue]['city']} ({VENUES[venue]['altitude_m']}m alt, "
           f"{VENUES[venue]['temp_c']}°C, {int(VENUES[venue]['humidity']*100)}% humidity)")
     print(f"     Rest: {team_a} {rest_a}d | {team_b} {rest_b}d   Stage: {stage.upper()}")
+    if knockout:
+        print(f"  🏆 KNOCKOUT — a 90' draw is settled by extra time + penalties")
     print(f"{'─'*W}")
 
     # Squad warnings
@@ -2146,6 +2198,8 @@ def predict_match(team_a, team_b, venue="Neutral",
     print(f"{'─'*W}")
     print(f"  Expected goals :  {team_a} {lam_a:.2f}  –  {lam_b:.2f}  {team_b}")
     print(f"  Win / Draw / Win: {w*100:>5.1f}%  /  {d*100:>5.1f}%  /  {l*100:>5.1f}%")
+    if knockout:
+        print(f"  Advancement     : {team_a} {p_adv_a*100:>5.1f}%   {team_b} {p_adv_b*100:>5.1f}%  (incl. ET + pens)")
     print()
     print(f"  {'Top Exact Scores':<20} {'Probability':>11}  {'Cumulative':>11}  Result")
     print(f"  {'─'*60}")
@@ -2178,7 +2232,15 @@ def predict_match(team_a, team_b, venue="Neutral",
             if outcome == 'b'    and b_g > a_g: return (a_g, b_g, prob)
         return scores[0]
 
-    if w >= FAVOR_THRESHOLD and w >= l:
+    if knockout:
+        # Single-elimination: no draw pick — recommend who advances (incl. ET + pens).
+        if p_adv_a >= p_adv_b:
+            tp = _best_score_for_outcome('a')
+            tp_label = f"{team_a} to advance ({p_adv_a*100:.0f}%)"
+        else:
+            tp = _best_score_for_outcome('b')
+            tp_label = f"{team_b} to advance ({p_adv_b*100:.0f}%)"
+    elif w >= FAVOR_THRESHOLD and w >= l:
         tp = _best_score_for_outcome('a')
         tp_label = f"{team_a} win"
     elif l >= FAVOR_THRESHOLD and l > w:
@@ -2218,8 +2280,7 @@ def predict_match(team_a, team_b, venue="Neutral",
 
     print(f"{'═'*W}\n")
 
-    return {"lam_a": lam_a, "lam_b": lam_b, "win_a": w, "draw": d, "win_b": l,
-            "top_scores": top10, "matrix": P}
+    return _result_payload(top10)
 
 
 def predict_group(group_name, venue="Neutral"):

@@ -54,6 +54,13 @@ def fetch_our_prediction(home: str, away: str,
     P = mdl.score_matrix(lam_a, lam_b)
     w, d, l = mdl.wdl(P)
 
+    # Knockout: advancement % after extra time + penalties (separate from 90' line).
+    if mdl.is_knockout(stage):
+        p_adv_home, p_adv_away = mdl._advancement_probs(home, away, lam_a, lam_b, w, d, l)
+        p_adv_home, p_adv_away = round(p_adv_home, 3), round(p_adv_away, 3)
+    else:
+        p_adv_home = p_adv_away = None
+
     scores = sorted(
         [(i, j, P[i, j]) for i in range(P.shape[0]) for j in range(P.shape[1])],
         key=lambda x: -x[2]
@@ -65,6 +72,8 @@ def fetch_our_prediction(home: str, away: str,
         "w": round(w, 3),
         "d": round(d, 3),
         "l": round(l, 3),
+        "p_adv_home": p_adv_home,
+        "p_adv_away": p_adv_away,
         "top3": top3,
         "xg": (round(lam_a, 2), round(lam_b, 2)),
         "available": True,
@@ -131,6 +140,95 @@ def fetch_betting_odds(fixture_id: Optional[int] = None,
 
     return {"source": "Betting Odds", "available": False,
             "reason": "Could not parse odds structure"}
+
+
+# ── To-qualify market (knockout advancement) ──────────────────────────
+
+_QUALIFY_KEYWORDS = ("qualif", "to advance", "advance", "to reach", "to win the tie")
+
+
+def list_odds_markets(fixture_id: int) -> list:
+    """
+    Probe: list every (bet_id, bet_name) market api-football offers for a fixture.
+    Use this once R32 odds go live to discover the real "To Qualify" market id.
+    """
+    if not API_KEY:
+        return []
+    try:
+        r = requests.get(f"{API_BASE}/odds", headers={"x-apisports-key": API_KEY},
+                         params={"fixture": fixture_id}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        log.warning("list_odds_markets failed: %s", e)
+        return []
+    seen, out = set(), []
+    for item in data.get("response", []):
+        for bm in item.get("bookmakers", []):
+            for bet in bm.get("bets", []):
+                key = (bet.get("id"), bet.get("name"))
+                if key not in seen:
+                    seen.add(key)
+                    out.append({"id": bet.get("id"), "name": bet.get("name")})
+    return sorted(out, key=lambda x: (x["id"] is None, x["id"] or 0))
+
+
+def fetch_qualify_odds(fixture_id: Optional[int] = None,
+                       home: str = "", away: str = "") -> dict:
+    """
+    Fetch the 2-way "to qualify / to advance" market and convert to implied
+    advancement probabilities (overround removed). This is the knockout analogue
+    of the 90' Match Winner line and is kept SEPARATE from it so the two are
+    never compared against each other.
+    """
+    if not API_KEY:
+        return {"source": "To Qualify Odds", "available": False, "reason": "No API key"}
+    if not fixture_id:
+        return {"source": "To Qualify Odds", "available": False,
+                "reason": "fixture id required to locate market"}
+
+    try:
+        r = requests.get(f"{API_BASE}/odds", headers={"x-apisports-key": API_KEY},
+                         params={"fixture": fixture_id}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return {"source": "To Qualify Odds", "available": False, "reason": str(e)}
+
+    if data.get("errors"):
+        return {"source": "To Qualify Odds", "available": False,
+                "reason": str(data["errors"])}
+
+    for item in data.get("response", []):
+        for bm in item.get("bookmakers", []):
+            for bet in bm.get("bets", []):
+                name = (bet.get("name") or "").lower()
+                vals = bet.get("values", [])
+                if not any(k in name for k in _QUALIFY_KEYWORDS):
+                    continue
+                if len(vals) != 2:
+                    continue
+                # Two-way market: map by Home/Away label, else by order.
+                lut = {str(v.get("value", "")).lower(): float(v["odd"]) for v in vals}
+                h_odd = lut.get("home") or lut.get(home.lower())
+                a_odd = lut.get("away") or lut.get(away.lower())
+                if not (h_odd and a_odd):
+                    odds_in_order = [float(v["odd"]) for v in vals]
+                    h_odd, a_odd = odds_in_order[0], odds_in_order[1]
+                raw_h, raw_a = 1 / h_odd, 1 / a_odd
+                total = raw_h + raw_a
+                return {
+                    "source": "To Qualify Odds",
+                    "bookmaker": bm.get("name", "unknown"),
+                    "bet_name": bet.get("name"),
+                    "bet_id": bet.get("id"),
+                    "p_adv_home": round(raw_h / total, 3),
+                    "p_adv_away": round(raw_a / total, 3),
+                    "available": True,
+                }
+
+    return {"source": "To Qualify Odds", "available": False,
+            "reason": "No to-qualify market published yet"}
 
 
 # ── Hicruben (cup26matches.com) ───────────────────────────────────────────────
@@ -222,15 +320,22 @@ def compare_match(home: str, away: str,
       sources: list of source dicts (w/d/l + metadata),
       warnings: list of discrepancy warning strings.
     """
+    import mundial_2026 as mdl
+    knockout = mdl.is_knockout(stage)
+
     our   = fetch_our_prediction(home, away, venue, stage)
-    odds  = fetch_betting_odds(fixture_id, home, away)
+    odds  = fetch_betting_odds(fixture_id, home, away)       # 90' Match Winner (1X2)
     hicr  = fetch_hicruben_prediction(home, away)
     pele  = fetch_pele_prediction(home, away)
 
     sources = [our, odds, hicr, pele]
 
-    # Discrepancy check: compare our W% to each available external source
+    # To-qualify market is the advancement analogue, kept separate from 90' lines.
+    qualify = fetch_qualify_odds(fixture_id, home, away) if knockout else None
+
     warnings = []
+
+    # (1) 90'-vs-90' check only: our regulation W% vs 90' sources (bet=1, etc.).
     our_w = our["w"]
     for src in [odds, hicr, pele]:
         if not src.get("available"):
@@ -238,15 +343,29 @@ def compare_match(home: str, away: str,
         diff = abs(our_w - src["w"])
         if diff > DISCREPANCY_THRESHOLD:
             warnings.append(
-                f"⚠️ Our W% ({our_w*100:.0f}%) differs from {src['source']} "
+                f"⚠️ Our 90′ W% ({our_w*100:.0f}%) differs from {src['source']} "
                 f"({src['w']*100:.0f}%) by {diff*100:.0f}pp — review model inputs."
             )
-        for w in warnings:
-            log.warning(w)
+
+    # (2) advancement-vs-advancement check only (never crosses the 90' line).
+    if (knockout and qualify and qualify.get("available")
+            and our.get("p_adv_home") is not None):
+        diff = abs(our["p_adv_home"] - qualify["p_adv_home"])
+        if diff > DISCREPANCY_THRESHOLD:
+            warnings.append(
+                f"⚠️ Our advancement% for {home} ({our['p_adv_home']*100:.0f}%) "
+                f"differs from market to-qualify ({qualify['p_adv_home']*100:.0f}%) "
+                f"by {diff*100:.0f}pp — review model inputs."
+            )
+
+    for w in warnings:
+        log.warning(w)
 
     return {
         "home": home, "away": away, "venue": venue, "stage": stage,
+        "knockout": knockout,
         "sources": sources,
+        "qualify_odds": qualify,
         "warnings": warnings,
     }
 
@@ -297,6 +416,22 @@ def format_comparison_table(result: dict) -> str:
         xg_a, xg_b = our["xg"]
         lines.append(f"\n📊 *Top scores:* {top3_str}")
         lines.append(f"⚡ *xG:* {home} {xg_a} — {xg_b} {away}")
+
+    # Knockout: advancement % (our model vs market to-qualify), separate from 90'.
+    if result.get("knockout") and our and our.get("p_adv_home") is not None:
+        lines.append(
+            f"🏆 *Advancement (our):* {home} {our['p_adv_home']*100:.0f}%  "
+            f"·  {away} {our['p_adv_away']*100:.0f}%"
+        )
+        q = result.get("qualify_odds")
+        if q and q.get("available"):
+            lines.append(
+                f"💰 *To-qualify (market):* {home} {q['p_adv_home']*100:.0f}%  "
+                f"·  {away} {q['p_adv_away']*100:.0f}%"
+            )
+        else:
+            reason = (q or {}).get("reason", "n/a")
+            lines.append(f"💰 *To-qualify (market):* — _{reason}_")
 
     # Warnings
     for w in result.get("warnings", []):

@@ -440,6 +440,7 @@ def update_elo_after_match(home_team: str, away_team: str,
         log.warning("Elo update skipped: unknown team(s) %s / %s", home_team, away_team)
         return
 
+    stage = (stage or "group").lower()
     k = 40 if stage in ("r32", "r16", "qf", "sf", "final", "3rd") else 32
 
     is_draw = home_goals == away_goals
