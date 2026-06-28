@@ -341,7 +341,7 @@ def _process_lineups(fixture_id: int) -> bool:
     (e.g. lineups not yet published). Callers use this to decide whether the
     fixture has been fully handled or should be retried later.
     """
-    from mundial_2026 import LINEUP_CONFIRMED, injure_player, find_player, TEAMS
+    from mundial_2026 import LINEUP_CONFIRMED, find_player, TEAMS, _save_state
 
     lineups = _get_fixture_lineups(fixture_id)
     if not lineups:
@@ -384,6 +384,9 @@ def _process_lineups(fixture_id: int) -> bool:
             starters_str = " · ".join(starters[:11])
             _notify(f"📋 <b>Alineación confirmada — {team}</b>\n{starters_str}")
             log.info("Lineup synced for %s", team)
+
+    if confirmed_any:
+        _save_state()
 
     return confirmed_any
 
