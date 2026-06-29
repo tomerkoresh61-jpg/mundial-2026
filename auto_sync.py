@@ -15,6 +15,7 @@ import time
 import logging
 import unicodedata
 import difflib
+import threading
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -34,6 +35,7 @@ IDLE_POLL_SEC  = 300        # poll upcoming fixtures every 5 min when no live ga
 LINEUP_WINDOW  = 90         # minutes before KO to start polling for lineups
 API_BASE       = "https://v3.football.api-sports.io"
 FIXTURES_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_fixtures.json")
+SYNC_STATE_FILE = os.path.join(os.path.dirname(__file__), "auto_sync_state.json")
 
 # ── shared state (imported by mundial_2026 functions) ─────────────────────────
 # Populated by this module; telegram_bot reads these for display.
@@ -41,6 +43,47 @@ _known_fixture_ids: set   = set()   # fixture IDs we've seen
 _live_fixture_ids:  set   = set()   # currently live
 _lineup_checked:    set   = set()   # fixture IDs where we already synced lineup
 _sent_events:       set   = set()   # "fixture_id:event_type:player/team" dedup keys
+_sync_state_loaded  = False
+_sync_state_lock    = threading.RLock()
+
+
+def _load_sync_state() -> None:
+    """Load persisted dedupe keys so restarts do not replay side effects."""
+    global _sync_state_loaded
+    with _sync_state_lock:
+        _known_fixture_ids.clear()
+        _sent_events.clear()
+        if os.path.exists(SYNC_STATE_FILE):
+            try:
+                with open(SYNC_STATE_FILE) as f:
+                    state = json.load(f)
+                _known_fixture_ids.update(
+                    fid for fid in state.get("finished_fixture_ids", [])
+                    if fid is not None
+                )
+                _sent_events.update(str(key) for key in state.get("sent_events", []))
+            except Exception as exc:
+                log.error("Failed to load sync state %s: %s", SYNC_STATE_FILE, exc)
+        _sync_state_loaded = True
+
+
+def _ensure_sync_state_loaded() -> None:
+    if not _sync_state_loaded:
+        _load_sync_state()
+
+
+def _save_sync_state() -> None:
+    """Persist dedupe keys atomically after applying a live-sync side effect."""
+    _ensure_sync_state_loaded()
+    with _sync_state_lock:
+        state = {
+            "finished_fixture_ids": sorted(_known_fixture_ids, key=str),
+            "sent_events": sorted(_sent_events),
+        }
+        tmp_path = f"{SYNC_STATE_FILE}.tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, SYNC_STATE_FILE)
 
 # ── api-football helpers ──────────────────────────────────────────────────────
 
@@ -277,6 +320,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
     from mundial_2026 import (add_yellow_card, injure_player, update_result,
                                YELLOW_CARDS, mark_extra_time)
 
+    _ensure_sync_state_loaded()
     events = _get_fixture_events(fixture_id)
     teams  = _known_teams()
 
@@ -300,6 +344,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
                 _sent_events.add(key)
                 yellows_before = YELLOW_CARDS.get(resolved, 0)
                 add_yellow_card(resolved)
+                _save_sync_state()
                 if yellows_before >= 1:
                     msg = (f"🟨 <b>SUSPENSION</b>: {resolved} ha recibido su 2ª amarilla "
                            f"→ suspendido (min {elapsed})")
@@ -314,6 +359,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
             if resolved:
                 _sent_events.add(key)
                 injure_player(resolved)   # mark unavailable for next match
+                _save_sync_state()
                 _notify(f"🟥 <b>Roja</b>: {resolved} expulsado (min {elapsed}) — suspendido siguiente partido")
                 log.info("Red card: %s (min %s)", resolved, elapsed)
 
@@ -329,6 +375,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
                     mark_extra_time(home_team)
                 if away_team:
                     mark_extra_time(away_team)
+                _save_sync_state()
                 _notify(f"⏱ Prórroga detectada: {home_api} vs {away_api} (min {elapsed})")
                 log.info("AET detected: %s vs %s", home_api, away_api)
 
@@ -343,6 +390,7 @@ def _process_lineups(fixture_id: int) -> bool:
     """
     from mundial_2026 import LINEUP_CONFIRMED, injure_player, find_player, TEAMS
 
+    _ensure_sync_state_loaded()
     lineups = _get_fixture_lineups(fixture_id)
     if not lineups:
         return False
@@ -381,6 +429,7 @@ def _process_lineups(fixture_id: int) -> bool:
         key = f"{fixture_id}:lineup:{team}"
         if key not in _sent_events:
             _sent_events.add(key)
+            _save_sync_state()
             starters_str = " · ".join(starters[:11])
             _notify(f"📋 <b>Alineación confirmada — {team}</b>\n{starters_str}")
             log.info("Lineup synced for %s", team)
@@ -472,6 +521,7 @@ def update_elo_after_match(home_team: str, away_team: str,
 
 def _check_finished_matches(upcoming: list[dict]) -> None:
     """Detect matches that just finished; update Elo and notify."""
+    _ensure_sync_state_loaded()
     for fix in upcoming:
         fid    = fix["fixture_id"]
         status = fix.get("status", "NS")
@@ -491,6 +541,7 @@ def _check_finished_matches(upcoming: list[dict]) -> None:
                     fix["home"], fix["away"], int(hs), int(as_),
                     stage=fix.get("stage", "group"),
                 )
+            _save_sync_state()
 
 
 # ── main sync loop ────────────────────────────────────────────────────────────
@@ -502,6 +553,7 @@ def run_sync_loop() -> None:
     - Every IDLE_POLL_SEC otherwise.
     """
     log.info("Sync loop starting (league=%s season=%s)", LEAGUE_ID, SEASON)
+    _load_sync_state()
     if not API_KEY:
         log.warning("API_FOOTBALL_KEY not set — live event sync disabled; "
                     "upcoming fixtures served from wc2026_fixtures.json")
