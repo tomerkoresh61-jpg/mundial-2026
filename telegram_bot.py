@@ -493,6 +493,31 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _edit(query, "🔄 *עדכון מידע*\nבחר פעולה:", kb_update_menu())
         return
 
+    if data.startswith("news_apply||"):
+        key = data.split("||", 1)[1]
+        try:
+            from news_intel import apply_pending_item
+            result = apply_pending_item(key)
+            await query.answer("✅ הוחל!", show_alert=True)
+            await _edit(query, f"✅ המידע הוחל על המודל.\n\n{result}", kb_main())
+        except Exception as e:
+            log.error("news_apply failed: %s", e, exc_info=True)
+            await query.answer("❌ שגיאה בעדכון", show_alert=True)
+            await _edit(query, f"❌ שגיאה בעדכון המידע: {e}", kb_main())
+        return
+
+    if data.startswith("news_ignore||") or data == "news_ignore":
+        key = data.split("||", 1)[1] if "||" in data else ""
+        if key:
+            try:
+                from news_intel import get_pending_item
+                get_pending_item(key)
+            except Exception as e:
+                log.warning("news_ignore cleanup failed: %s", e)
+        await query.answer("❌ התעלמנו מהמידע.", show_alert=True)
+        await _edit(query, "🔄 *עדכון מידע*\nבחר פעולה:", kb_update_menu())
+        return
+
     # ── Simulate ───────────────────────────────────────────────
     if data == "simulate":
         await _edit(query, "🎲 מריץ 50,000 סימולציות... (כ-25 שניות)", None)
