@@ -61,6 +61,7 @@ SOURCES = [
 ]
 
 # Already processed article fingerprints (URL hash + headline hash)
+SEEN_ARTICLES_FILE = os.path.join(os.path.dirname(__file__), "news_seen_articles.json")
 _seen_articles: set = set()
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -73,6 +74,34 @@ def _norm(s: str) -> str:
 
 def _fingerprint(*parts) -> str:
     return hashlib.md5("|".join(str(p) for p in parts).encode()).hexdigest()
+
+
+def _load_seen_articles() -> None:
+    """Load persisted article fingerprints so restarts do not replay old intel."""
+    if not os.path.exists(SEEN_ARTICLES_FILE):
+        return
+    try:
+        with open(SEEN_ARTICLES_FILE) as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            _seen_articles.update(str(fp) for fp in data)
+    except Exception as exc:
+        log.warning("Failed to load seen news articles: %s", exc)
+
+
+def _save_seen_articles() -> None:
+    """Persist article fingerprints atomically; keep only a bounded recent cache."""
+    try:
+        if len(_seen_articles) > 5000:
+            kept = set(sorted(_seen_articles)[-5000:])
+            _seen_articles.clear()
+            _seen_articles.update(kept)
+        tmp_path = f"{SEEN_ARTICLES_FILE}.tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(sorted(_seen_articles), f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, SEEN_ARTICLES_FILE)
+    except Exception as exc:
+        log.warning("Failed to save seen news articles: %s", exc)
 
 
 def _notify(text: str, parse_mode: str = "HTML") -> None:
@@ -269,8 +298,8 @@ def _apply_item(item: dict) -> str:
     Apply a single intel item to mundial_2026 state.
     Returns a human-readable description of what was changed.
     """
-    from mundial_2026 import (set_fitness, injure_player, apply_intel,
-                               find_player, SOURCES as M_SOURCES)
+    from mundial_2026 import (set_fitness, injure_player, set_player_form,
+                               set_team_form, find_player, find_team)
     itype  = item.get("type")
     player = item.get("player")
     team   = item.get("team")
@@ -303,16 +332,23 @@ def _apply_item(item: dict) -> str:
         injure_player(resolved_player)
         return f"🟥 Suspensión: {resolved_player} marcado como no disponible"
 
-    elif itype == "form" and team and direc is not None:
+    elif itype in ("form", "player_form", "team_form"):
         try:
-            direction = int(direc)
+            direction = int(direc if direc is not None else value)
         except (TypeError, ValueError):
             direction = 0
         if direction != 0:
-            intel_tuple = ("auto_news", itype, team, direction, detail)
-            apply_intel([intel_tuple])
             arrow = "📈" if direction > 0 else "📉"
-            return f"{arrow} Forma de equipo actualizada: {team} ({'+1' if direction > 0 else '-1'})"
+            direction_label = "+1" if direction > 0 else "-1"
+            if resolved_player and itype != "team_form":
+                set_player_form(resolved_player, direction)
+                return f"{arrow} Forma de jugador actualizada: {resolved_player} ({direction_label})"
+            if team:
+                resolved_team = find_team(team, quiet=True)
+                if not resolved_team:
+                    return f"⚠️ Equipo no encontrado: {team}"
+                set_team_form(resolved_team, direction)
+                return f"{arrow} Forma de equipo actualizada: {resolved_team} ({direction_label})"
 
     elif itype == "team_note" and team:
         return f"📝 Nota: {team} — {detail}"
@@ -342,11 +378,12 @@ def _route_item(item: dict, source_name: str, article_url: str) -> None:
     elif confidence >= 0.55:
         # 🟡 MEDIUM — ask for confirmation
         item_json = json.dumps(item, ensure_ascii=False)
-        # Store pending in global for telegram_bot to retrieve via callback
-        _pending_items[item_json] = item
+        # Telegram callback_data is limited to 64 bytes, so use an opaque key.
+        pending_key = _fingerprint(source_name, article_url, item_json)[:16]
+        _pending_items[pending_key] = item
         buttons = [[
-            {"text": "✅ Aplicar",  "callback_data": f"news_apply||{item_json[:200]}"},
-            {"text": "❌ Ignorar",  "callback_data": "news_ignore"},
+            {"text": "✅ Aplicar",  "callback_data": f"news_apply||{pending_key}"},
+            {"text": "❌ Ignorar",  "callback_data": f"news_ignore||{pending_key}"},
         ]]
         _notify_with_buttons(
             f"🟡 <b>Confirmar intel</b>\n{summary}\n"
@@ -361,7 +398,7 @@ def _route_item(item: dict, source_name: str, article_url: str) -> None:
 
 
 # Pending medium-confidence items awaiting user confirmation
-# Key = truncated JSON string matching callback_data, Value = full item dict
+# Key = short opaque callback id, Value = full item dict
 _pending_items: dict = {}
 
 
@@ -392,6 +429,7 @@ def run_news_loop() -> None:
     if not ANTHROPIC_KEY:
         log.error("ANTHROPIC_API_KEY not set — news loop disabled")
         return
+    _load_seen_articles()
 
     while True:
         try:
@@ -404,6 +442,7 @@ def run_news_loop() -> None:
                         _route_item(item, source["name"], article["url"])
                     # Mark as seen regardless of extraction result
                     _seen_articles.add(article["fp"])
+                    _save_seen_articles()
                     time.sleep(1)   # be polite to Claude API rate limits
         except Exception as exc:
             log.error("News loop error: %s", exc, exc_info=True)
