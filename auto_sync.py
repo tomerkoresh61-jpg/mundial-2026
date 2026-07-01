@@ -161,6 +161,8 @@ def _load_hardcoded_fixtures() -> list[dict]:
             "status":     item.get("status", "NS"),
             "home_score": item.get("home_score"),
             "away_score": item.get("away_score"),
+            "home_winner": item.get("home_winner"),
+            "away_winner": item.get("away_winner"),
             "elapsed":    None,
             "source":     "hardcoded",
         })
@@ -226,6 +228,8 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
                     "status":     fix.get("status", {}).get("short", "NS"),
                     "home_score": goals.get("home"),
                     "away_score": goals.get("away"),
+                    "home_winner": teams.get("home", {}).get("winner"),
+                    "away_winner": teams.get("away", {}).get("winner"),
                     "elapsed":    fix.get("status", {}).get("elapsed"),
                     "source":     "api",
                 })
@@ -418,7 +422,8 @@ def _check_upcoming_lineups(upcoming: list[dict]) -> None:
 
 def update_elo_after_match(home_team: str, away_team: str,
                            home_goals: int, away_goals: int,
-                           stage: str = "group") -> None:
+                           stage: str = "group",
+                           winner_team: Optional[str] = None) -> None:
     """
     Update Elo ratings after a finished match.
 
@@ -429,12 +434,20 @@ def update_elo_after_match(home_team: str, away_team: str,
       result   = 1.0 win / 0.5 draw / 0.0 loss
 
     Ratings are persisted to team_ratings.json immediately.
+
+    For tied knockout scores decided on penalties, pass winner_team from the
+    API winner flag so the advancing side is not recorded as an Elo draw.
     """
     try:
         from mundial_2026 import update_elo_rating, TEAM_RATINGS
     except ImportError:
         log.error("update_elo_after_match: could not import mundial_2026")
         return
+
+    teams = list(TEAM_RATINGS.keys())
+    home_team = _fuzzy_team(home_team, teams) or home_team
+    away_team = _fuzzy_team(away_team, teams) or away_team
+    winner_team = _fuzzy_team(winner_team, teams) if winner_team else None
 
     if home_team not in TEAM_RATINGS or away_team not in TEAM_RATINGS:
         log.warning("Elo update skipped: unknown team(s) %s / %s", home_team, away_team)
@@ -444,7 +457,13 @@ def update_elo_after_match(home_team: str, away_team: str,
     k = 40 if stage in ("r32", "r16", "qf", "sf", "final", "3rd") else 32
 
     is_draw = home_goals == away_goals
-    if is_draw:
+    if is_draw and winner_team in (home_team, away_team):
+        is_draw = False
+        if winner_team == home_team:
+            winner, loser = home_team, away_team
+        else:
+            winner, loser = away_team, home_team
+    elif is_draw:
         winner, loser = home_team, away_team
     elif home_goals > away_goals:
         winner, loser = home_team, away_team
@@ -487,9 +506,15 @@ def _check_finished_matches(upcoming: list[dict]) -> None:
             )
             # Auto-update Elo if we have a clean result
             if hs is not None and as_ is not None:
+                winner_team = None
+                if fix.get("home_winner") is True:
+                    winner_team = fix["home"]
+                elif fix.get("away_winner") is True:
+                    winner_team = fix["away"]
                 update_elo_after_match(
                     fix["home"], fix["away"], int(hs), int(as_),
                     stage=fix.get("stage", "group"),
+                    winner_team=winner_team,
                 )
 
 
