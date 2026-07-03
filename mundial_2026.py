@@ -41,6 +41,8 @@ import sys
 import os
 import itertools
 import unicodedata
+import tempfile
+import threading
 from collections import Counter, defaultdict
 
 # ─────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ BASE_GOALS  = 1.33    # Average WC goals per team per game (2014–2022 avg)
 RHO         = -0.13   # Dixon-Coles low-score correlation
 N_SIMS      = 50_000  # Monte Carlo iterations
 STATE_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_state.json")
+_STATE_LOCK = threading.RLock()
 
 # ══════════════════════════════════════════════════════════════
 # 1. GROUP DRAW
@@ -1504,58 +1507,82 @@ def consensus_report(our_probs):
 
 def _load_state():
     """Load all saved state (player availability, form, updated parameters)."""
-    if not os.path.exists(STATE_FILE):
-        return
-    with open(STATE_FILE) as f:
-        state = json.load(f)
-    for team, params in state.get("teams", {}).items():
-        if team in TEAMS:
-            TEAMS[team]["attack"]  = params.get("attack",  TEAMS[team]["attack"])
-            TEAMS[team]["defense"] = params.get("defense", TEAMS[team]["defense"])
-    for player, avail in state.get("availability", {}).items():
-        for team in TEAMS.values():
-            if player in team["players"]:
-                team["players"][player]["available"] = avail
-    for player, frm in state.get("player_form", {}).items():
-        for team in TEAMS.values():
-            if player in team["players"]:
-                team["players"][player]["form"] = frm
-    for player, fit in state.get("player_fitness", {}).items():
-        for team in TEAMS.values():
-            if player in team["players"]:
-                team["players"][player]["fitness"] = fit
-    for team, frm in state.get("team_form", {}).items():
-        if team in TEAM_FORM:
-            TEAM_FORM[team] = frm
-    for player, yc in state.get("yellow_cards", {}).items():
-        YELLOW_CARDS[player] = yc
-    for team, et in state.get("extra_time", {}).items():
-        TEAM_EXTRA_TIME[team] = et
-    for team, lc in state.get("lineup_confirmed", {}).items():
-        LINEUP_CONFIRMED[team] = lc
-    _load_elo_ratings()
+    with _STATE_LOCK:
+        if not os.path.exists(STATE_FILE):
+            return
+        try:
+            with open(STATE_FILE) as f:
+                state = json.load(f)
+        except json.JSONDecodeError as exc:
+            print(f"  ⚠️  State file is invalid JSON; keeping in-memory state: {exc}")
+            return
+        for team, params in state.get("teams", {}).items():
+            if team in TEAMS:
+                TEAMS[team]["attack"]  = params.get("attack",  TEAMS[team]["attack"])
+                TEAMS[team]["defense"] = params.get("defense", TEAMS[team]["defense"])
+        for player, avail in state.get("availability", {}).items():
+            for team in TEAMS.values():
+                if player in team["players"]:
+                    team["players"][player]["available"] = avail
+        for player, frm in state.get("player_form", {}).items():
+            for team in TEAMS.values():
+                if player in team["players"]:
+                    team["players"][player]["form"] = frm
+        for player, fit in state.get("player_fitness", {}).items():
+            for team in TEAMS.values():
+                if player in team["players"]:
+                    team["players"][player]["fitness"] = fit
+        for team, frm in state.get("team_form", {}).items():
+            if team in TEAM_FORM:
+                TEAM_FORM[team] = frm
+        for player, yc in state.get("yellow_cards", {}).items():
+            YELLOW_CARDS[player] = yc
+        for team, et in state.get("extra_time", {}).items():
+            TEAM_EXTRA_TIME[team] = et
+        for team, lc in state.get("lineup_confirmed", {}).items():
+            LINEUP_CONFIRMED[team] = lc
+        _load_elo_ratings()
 
 
 def _save_state():
-    state = {
-        "teams": {t: {"attack": p["attack"], "defense": p["defense"]}
-                  for t, p in TEAMS.items()},
-        "availability": {pl: data["available"]
-                         for t in TEAMS.values()
-                         for pl, data in t["players"].items()},
-        "player_form":  {pl: data["form"]
-                         for t in TEAMS.values()
-                         for pl, data in t["players"].items()},
-        "player_fitness": {pl: data.get("fitness", 1.0)
-                           for t in TEAMS.values()
-                           for pl, data in t["players"].items()},
-        "team_form":      dict(TEAM_FORM),
-        "yellow_cards":     dict(YELLOW_CARDS),
-        "extra_time":       dict(TEAM_EXTRA_TIME),
-        "lineup_confirmed": dict(LINEUP_CONFIRMED),
-    }
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+    with _STATE_LOCK:
+        state = {
+            "teams": {t: {"attack": p["attack"], "defense": p["defense"]}
+                      for t, p in TEAMS.items()},
+            "availability": {pl: data["available"]
+                             for t in TEAMS.values()
+                             for pl, data in t["players"].items()},
+            "player_form":  {pl: data["form"]
+                             for t in TEAMS.values()
+                             for pl, data in t["players"].items()},
+            "player_fitness": {pl: data.get("fitness", 1.0)
+                               for t in TEAMS.values()
+                               for pl, data in t["players"].items()},
+            "team_form":      dict(TEAM_FORM),
+            "yellow_cards":     dict(YELLOW_CARDS),
+            "extra_time":       dict(TEAM_EXTRA_TIME),
+            "lineup_confirmed": dict(LINEUP_CONFIRMED),
+        }
+        state_dir = os.path.dirname(STATE_FILE) or "."
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(STATE_FILE)}.",
+            suffix=".tmp",
+            dir=state_dir,
+            text=True,
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, STATE_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2423,33 +2450,34 @@ def predict_top_scorers(tournament_probs=None, n=20_000):
 
 def update_result(team_a, team_b, ga, gb, weight=0.32):
     """Bayesian-style parameter update after a real match result."""
-    lam_a, lam_b, _ = expected_goals(team_a, team_b)
-    ra = ga / max(lam_a, 0.01)
-    rb = gb / max(lam_b, 0.01)
+    with _STATE_LOCK:
+        lam_a, lam_b, _ = expected_goals(team_a, team_b)
+        ra = ga / max(lam_a, 0.01)
+        rb = gb / max(lam_b, 0.01)
 
-    def blend(old, ratio, w):
-        return old * ((1-w) + w*ratio)
+        def blend(old, ratio, w):
+            return old * ((1-w) + w*ratio)
 
-    TEAMS[team_a]["attack"]  = blend(TEAMS[team_a]["attack"],  ra, weight)
-    TEAMS[team_b]["attack"]  = blend(TEAMS[team_b]["attack"],  rb, weight)
-    TEAMS[team_b]["defense"] = blend(TEAMS[team_b]["defense"], ra, weight)
-    TEAMS[team_a]["defense"] = blend(TEAMS[team_a]["defense"], rb, weight)
+        TEAMS[team_a]["attack"]  = blend(TEAMS[team_a]["attack"],  ra, weight)
+        TEAMS[team_b]["attack"]  = blend(TEAMS[team_b]["attack"],  rb, weight)
+        TEAMS[team_b]["defense"] = blend(TEAMS[team_b]["defense"], ra, weight)
+        TEAMS[team_a]["defense"] = blend(TEAMS[team_a]["defense"], rb, weight)
 
-    # Auto-update team form based on result vs expectation
-    if ra > 1.3:   TEAM_FORM[team_a] = min(2, TEAM_FORM[team_a]+1)
-    elif ra < 0.7: TEAM_FORM[team_a] = max(-2, TEAM_FORM[team_a]-1)
-    if rb > 1.3:   TEAM_FORM[team_b] = min(2, TEAM_FORM[team_b]+1)
-    elif rb < 0.7: TEAM_FORM[team_b] = max(-2, TEAM_FORM[team_b]-1)
+        # Auto-update team form based on result vs expectation
+        if ra > 1.3:   TEAM_FORM[team_a] = min(2, TEAM_FORM[team_a]+1)
+        elif ra < 0.7: TEAM_FORM[team_a] = max(-2, TEAM_FORM[team_a]-1)
+        if rb > 1.3:   TEAM_FORM[team_b] = min(2, TEAM_FORM[team_b]+1)
+        elif rb < 0.7: TEAM_FORM[team_b] = max(-2, TEAM_FORM[team_b]-1)
 
-    # Auto-apply match wear to injured players (fitness < 0.90)
-    apply_match_wear(team_a)
-    apply_match_wear(team_b)
+        # Auto-apply match wear to injured players (fitness < 0.90)
+        apply_match_wear(team_a)
+        apply_match_wear(team_b)
 
-    # Clear extra-time flags — these teams have now played their next match
-    TEAM_EXTRA_TIME.pop(team_a, None)
-    TEAM_EXTRA_TIME.pop(team_b, None)
+        # Clear extra-time flags — these teams have now played their next match
+        TEAM_EXTRA_TIME.pop(team_a, None)
+        TEAM_EXTRA_TIME.pop(team_b, None)
 
-    _save_state()
+        _save_state()
     print(f"\n  ✅ Updated after: {team_a} {ga}–{gb} {team_b}")
     print(f"     {team_a}: attack={TEAMS[team_a]['attack']:.3f}  defense={TEAMS[team_a]['defense']:.3f}  form={TEAM_FORM[team_a]:+d}")
     print(f"     {team_b}: attack={TEAMS[team_b]['attack']:.3f}  defense={TEAMS[team_b]['defense']:.3f}  form={TEAM_FORM[team_b]:+d}\n")
@@ -2457,39 +2485,42 @@ def update_result(team_a, team_b, ga, gb, weight=0.32):
 
 def injure_player(player_name):
     """Mark a player as unavailable (injured/suspended)."""
-    for team, tdata in TEAMS.items():
-        if player_name in tdata["players"]:
-            tdata["players"][player_name]["available"] = False
-            _save_state()
-            imp = tdata["players"][player_name]
-            print(f"\n  🚑 {player_name} ({team}) marked UNAVAILABLE")
-            print(f"     Attack impact: -{imp['attack_imp']*100:.0f}%  "
-                  f"Defense impact: -{imp['defense_imp']*100:.0f}%\n")
-            return
+    with _STATE_LOCK:
+        for team, tdata in TEAMS.items():
+            if player_name in tdata["players"]:
+                tdata["players"][player_name]["available"] = False
+                _save_state()
+                imp = tdata["players"][player_name]
+                print(f"\n  🚑 {player_name} ({team}) marked UNAVAILABLE")
+                print(f"     Attack impact: -{imp['attack_imp']*100:.0f}%  "
+                      f"Defense impact: -{imp['defense_imp']*100:.0f}%\n")
+                return
     print(f"  ❌ Player '{player_name}' not found.")
 
 
 def recover_player(player_name):
     """Mark a player as available again."""
-    for team, tdata in TEAMS.items():
-        if player_name in tdata["players"]:
-            tdata["players"][player_name]["available"] = True
-            _save_state()
-            print(f"\n  ✅ {player_name} ({team}) marked AVAILABLE\n")
-            return
+    with _STATE_LOCK:
+        for team, tdata in TEAMS.items():
+            if player_name in tdata["players"]:
+                tdata["players"][player_name]["available"] = True
+                _save_state()
+                print(f"\n  ✅ {player_name} ({team}) marked AVAILABLE\n")
+                return
     print(f"  ❌ Player '{player_name}' not found.")
 
 
 def set_player_form(player_name, form_value):
     """Set player form (-2 to +2)."""
     form_value = max(-2, min(2, int(form_value)))
-    for team, tdata in TEAMS.items():
-        if player_name in tdata["players"]:
-            tdata["players"][player_name]["form"] = form_value
-            _save_state()
-            arrow = "🔥" if form_value > 0 else ("❄️" if form_value < 0 else "〰️")
-            print(f"\n  {arrow} {player_name} form set to {form_value:+d}\n")
-            return
+    with _STATE_LOCK:
+        for team, tdata in TEAMS.items():
+            if player_name in tdata["players"]:
+                tdata["players"][player_name]["form"] = form_value
+                _save_state()
+                arrow = "🔥" if form_value > 0 else ("❄️" if form_value < 0 else "〰️")
+                print(f"\n  {arrow} {player_name} form set to {form_value:+d}\n")
+                return
     print(f"  ❌ Player '{player_name}' not found.")
 
 
@@ -2499,8 +2530,9 @@ def set_team_form(team_name, form_value):
         print(f"  ❌ Unknown team '{team_name}'")
         return
     form_value = max(-2, min(2, int(form_value)))
-    TEAM_FORM[team_name] = form_value
-    _save_state()
+    with _STATE_LOCK:
+        TEAM_FORM[team_name] = form_value
+        _save_state()
     print(f"  Team form {team_name} → {form_value:+d}\n")
 
 
@@ -2532,37 +2564,38 @@ def set_fitness(player_name, fitness_pct):
         return
 
     fitness_val = max(0.0, min(1.0, float(fitness_pct) / 100.0))
-    for team, tdata in TEAMS.items():
-        if player in tdata["players"]:
-            old_fit = tdata["players"][player].get("fitness", 1.0)
-            tdata["players"][player]["fitness"] = fitness_val
-            role = tdata["players"][player]["role"]
+    with _STATE_LOCK:
+        for team, tdata in TEAMS.items():
+            if player in tdata["players"]:
+                old_fit = tdata["players"][player].get("fitness", 1.0)
+                tdata["players"][player]["fitness"] = fitness_val
+                role = tdata["players"][player]["role"]
 
-            # Position-specific degradation table
-            ROLE_EXP = {"gk":(1.0,1.4), "defense":(1.1,1.5), "midfield":(1.2,1.2), "attack":(1.1,1.0)}
-            ae, de = ROLE_EXP.get(role, (1.1, 1.2))
-            att_retained  = fitness_val ** ae
-            def_retained  = fitness_val ** de
-            att_lost_pct  = (1 - att_retained) * tdata["players"][player]["attack_imp"]  * 100
-            def_lost_pct  = (1 - def_retained) * tdata["players"][player]["defense_imp"] * 100
+                # Position-specific degradation table
+                ROLE_EXP = {"gk":(1.0,1.4), "defense":(1.1,1.5), "midfield":(1.2,1.2), "attack":(1.1,1.0)}
+                ae, de = ROLE_EXP.get(role, (1.1, 1.2))
+                att_retained  = fitness_val ** ae
+                def_retained  = fitness_val ** de
+                att_lost_pct  = (1 - att_retained) * tdata["players"][player]["attack_imp"]  * 100
+                def_lost_pct  = (1 - def_retained) * tdata["players"][player]["defense_imp"] * 100
 
-            _save_state()
+                _save_state()
 
-            emoji = "🟡" if fitness_val >= 0.80 else ("🟠" if fitness_val >= 0.60 else "🔴")
-            print(f"\n  {emoji} {player} ({team}) fitness set to {fitness_val*100:.0f}%  "
-                  f"[was {old_fit*100:.0f}%]")
-            print(f"     Role: {role}  |  Playing through injury — not ruled out")
-            print(f"     Effective contribution retained:")
-            print(f"       Attack  : {att_retained*100:>5.1f}%  "
-                  f"(−{att_lost_pct:.1f}% off team attack rating)")
-            print(f"       Defense : {def_retained*100:>5.1f}%  "
-                  f"(−{def_lost_pct:.1f}% off team defense rating)")
-            if fitness_val < 0.80:
-                print(f"     ⚠️  Significant impact — factor this into predictions.")
-            if fitness_val < 0.65:
-                print(f"     🔴 Critical — consider whether he should start at all.")
-            print()
-            return
+                emoji = "🟡" if fitness_val >= 0.80 else ("🟠" if fitness_val >= 0.60 else "🔴")
+                print(f"\n  {emoji} {player} ({team}) fitness set to {fitness_val*100:.0f}%  "
+                      f"[was {old_fit*100:.0f}%]")
+                print(f"     Role: {role}  |  Playing through injury — not ruled out")
+                print(f"     Effective contribution retained:")
+                print(f"       Attack  : {att_retained*100:>5.1f}%  "
+                      f"(−{att_lost_pct:.1f}% off team attack rating)")
+                print(f"       Defense : {def_retained*100:>5.1f}%  "
+                      f"(−{def_lost_pct:.1f}% off team defense rating)")
+                if fitness_val < 0.80:
+                    print(f"     ⚠️  Significant impact — factor this into predictions.")
+                if fitness_val < 0.65:
+                    print(f"     🔴 Critical — consider whether he should start at all.")
+                print()
+                return
     print(f"  ❌ Player '{player_name}' not found.")
 
 
@@ -2575,15 +2608,17 @@ def add_yellow_card(player_name):
     pfull = find_player(player_name)
     if not pfull:
         return
-    YELLOW_CARDS[pfull] = YELLOW_CARDS.get(pfull, 0) + 1
-    count = YELLOW_CARDS[pfull]
-    _save_state()
+    with _STATE_LOCK:
+        YELLOW_CARDS[pfull] = YELLOW_CARDS.get(pfull, 0) + 1
+        count = YELLOW_CARDS[pfull]
+        _save_state()
+        if count >= 2:
+            print(f"\n  🟨 {pfull}: yellow card #{count}")
+            print(f"  🚨 2 yellow cards — marking {pfull} SUSPENDED (unavailable)")
+            injure_player(pfull)
+            return
     print(f"\n  🟨 {pfull}: yellow card #{count}")
-    if count >= 2:
-        print(f"  🚨 2 yellow cards — marking {pfull} SUSPENDED (unavailable)")
-        injure_player(pfull)
-    else:
-        print(f"  ⚠️  One more yellow = suspended for next match\n")
+    print(f"  ⚠️  One more yellow = suspended for next match\n")
 
 
 def clear_yellow_cards():
@@ -2592,9 +2627,10 @@ def clear_yellow_cards():
     Call between stages (e.g., after group stage, after Round of 16).
     WC 2026 rules: cards reset before Round of 32, and before QF.
     """
-    cleared = list(YELLOW_CARDS.keys())
-    YELLOW_CARDS.clear()
-    _save_state()
+    with _STATE_LOCK:
+        cleared = list(YELLOW_CARDS.keys())
+        YELLOW_CARDS.clear()
+        _save_state()
     if cleared:
         print(f"  ✅ Yellow cards cleared for: {', '.join(cleared)}\n")
     else:
@@ -2610,8 +2646,9 @@ def mark_extra_time(team_name):
     tfull = find_team(team_name)
     if not tfull:
         return
-    TEAM_EXTRA_TIME[tfull] = True
-    _save_state()
+    with _STATE_LOCK:
+        TEAM_EXTRA_TIME[tfull] = True
+        _save_state()
     print(f"\n  ⏱️  {tfull}: flagged as AET last round")
     print(f"     −9% attack & defense output in next match prediction.\n")
 
@@ -2622,17 +2659,19 @@ def apply_match_wear(team_name, wear_per_match=0.03):
     Call this after updating a real result.
     Players managing injuries through a tournament typically decline 2-4% per match.
     """
-    affected = []
-    for player, data in TEAMS[team_name]["players"].items():
-        if data.get("fitness", 1.0) < 0.90 and data["available"]:
-            old = data["fitness"]
-            data["fitness"] = max(0.30, old - wear_per_match)
-            affected.append((player, old, data["fitness"]))
+    with _STATE_LOCK:
+        affected = []
+        for player, data in TEAMS[team_name]["players"].items():
+            if data.get("fitness", 1.0) < 0.90 and data["available"]:
+                old = data["fitness"]
+                data["fitness"] = max(0.30, old - wear_per_match)
+                affected.append((player, old, data["fitness"]))
+        if affected:
+            _save_state()
     if affected:
         print(f"  📉 Tournament wear applied to {team_name}:")
         for pl, old, new in affected:
             print(f"     {pl}: {old*100:.0f}% → {new*100:.0f}%")
-        _save_state()
 
 
 def squad_report(team_name):
