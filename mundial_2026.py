@@ -333,7 +333,9 @@ YELLOW_CARDS: dict = {}
 # Cleared automatically when update_result is called for that team's next match
 TEAM_EXTRA_TIME: dict = {}
 
-# Official lineup confirmed {team_name: True} — set 75 min before kickoff
+# Official lineup confirmed for a specific upcoming match.
+# Values are either legacy booleans from older state files or metadata dicts:
+# {team_name: {"confirmed": True, "opponent": str|None, "fixture_id": str|None}}
 # Raises confidence level in bot display; auto-set by auto_sync.py
 LINEUP_CONFIRMED: dict = {}
 
@@ -1556,6 +1558,56 @@ def _save_state():
     }
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+def mark_lineup_confirmed(team_name, opponent=None, fixture_id=None):
+    """Record a lineup confirmation scoped to the match it belongs to."""
+    entry = {
+        "confirmed": True,
+        "opponent": opponent,
+        "fixture_id": str(fixture_id) if fixture_id is not None else None,
+    }
+    LINEUP_CONFIRMED[team_name] = entry
+
+
+def is_lineup_confirmed(team_name, opponent=None, fixture_id=None):
+    """
+    Return whether a lineup confirmation applies to this exact match context.
+
+    Older state files stored bare per-team booleans. Those are intentionally
+    ignored when an opponent or fixture id is provided, because they may belong
+    to a previous match involving the same team.
+    """
+    entry = LINEUP_CONFIRMED.get(team_name)
+    if not entry:
+        return False
+
+    if isinstance(entry, dict):
+        if not entry.get("confirmed", True):
+            return False
+        if fixture_id is not None:
+            return entry.get("fixture_id") == str(fixture_id)
+        if opponent is not None:
+            return entry.get("opponent") == opponent
+        return True
+
+    # Legacy boolean entry: only trust it when no match context is available.
+    return bool(entry) and opponent is None and fixture_id is None
+
+
+def lineup_confirmed_display():
+    """Human-readable confirmed lineup names for status output."""
+    confirmed = []
+    for team, entry in LINEUP_CONFIRMED.items():
+        if isinstance(entry, dict):
+            if entry.get("confirmed", True):
+                opponent = entry.get("opponent")
+                fixture_id = entry.get("fixture_id")
+                context = opponent or (f"fixture {fixture_id}" if fixture_id else None)
+                confirmed.append(f"{team} ({context})" if context else team)
+        elif entry:
+            confirmed.append(team)
+    return confirmed
 
 
 # ══════════════════════════════════════════════════════════════
