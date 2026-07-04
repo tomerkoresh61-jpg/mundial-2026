@@ -132,10 +132,10 @@ def kb_confirm_intel(item_json_b64: str):
 
 # ── Confidence level ─────────────────────────────────────────────
 def confidence_info(team_a: str, team_b: str,
-                    hours_to_ko: float = 999) -> tuple[str, str]:
-    lc = mdl.LINEUP_CONFIRMED
-    conf_a = lc.get(team_a, False)
-    conf_b = lc.get(team_b, False)
+                    hours_to_ko: float = 999,
+                    fixture_id=None) -> tuple[str, str]:
+    conf_a = mdl.is_lineup_confirmed(team_a, opponent=team_b, fixture_id=fixture_id)
+    conf_b = mdl.is_lineup_confirmed(team_b, opponent=team_a, fixture_id=fixture_id)
 
     if conf_a and conf_b:
         return "🟢", "שני ההרכבים אושרו רשמית"
@@ -232,7 +232,8 @@ def generate_narrative(team_a: str, team_b: str,
 def build_match_card(team_a: str, team_b: str,
                      venue: str = "Neutral", stage: str = "group",
                      match_time: str = "",
-                     hours_to_ko: float = 999) -> tuple[str, InlineKeyboardMarkup]:
+                     hours_to_ko: float = 999,
+                     fixture_id=None) -> tuple[str, InlineKeyboardMarkup]:
     mdl._load_state()
     # Resolve accented / aliased API names to model names (e.g. "Curaçao",
     # "Cape Verde Islands") before any TEAMS lookups.
@@ -253,7 +254,7 @@ def build_match_card(team_a: str, team_b: str,
         key=lambda x: -x[2]
     )
 
-    conf_emoji, conf_text = confidence_info(team_a, team_b, hours_to_ko)
+    conf_emoji, conf_text = confidence_info(team_a, team_b, hours_to_ko, fixture_id)
     top3 = " · ".join(f"{s[0]}-{s[1]} ({s[2]*100:.1f}%)" for s in scores[:3])
     best = scores[0]
 
@@ -433,8 +434,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Lineup confirmed ───────────────────────────────────────
     if data.startswith("lineup||"):
         _, a, b = data.split("||")
-        mdl.LINEUP_CONFIRMED[a] = True
-        mdl.LINEUP_CONFIRMED[b] = True
+        mdl.mark_lineup_confirmed(a, opponent=b)
+        mdl.mark_lineup_confirmed(b, opponent=a)
         mdl._save_state()
         await query.answer("✅ הרכב שתי הקבוצות סומן כמאושר!", show_alert=True)
         return
@@ -592,14 +593,19 @@ async def _show_upcoming(query, days: int):
         try:
             card_text, _ = build_match_card(
                 f["home"], f["away"], f["venue"], f["stage"],
-                match_time=date_str, hours_to_ko=hours
+                match_time=date_str, hours_to_ko=hours,
+                fixture_id=f.get("fixture_id")
             )
             # Near kickoff, surface lineup-confirmation status per team.
             if 0 <= mins <= LINEUP_FETCH_WINDOW:
                 ta = mdl.find_team(f["home"], quiet=True) or f["home"]
                 tb = mdl.find_team(f["away"], quiet=True) or f["away"]
-                sa = "✅ הרכבים אושרו" if mdl.LINEUP_CONFIRMED.get(ta) else "⏳ טרם"
-                sb = "✅ הרכבים אושרו" if mdl.LINEUP_CONFIRMED.get(tb) else "⏳ טרם"
+                sa = "✅ הרכבים אושרו" if mdl.is_lineup_confirmed(
+                    ta, opponent=tb, fixture_id=f.get("fixture_id")
+                ) else "⏳ טרם"
+                sb = "✅ הרכבים אושרו" if mdl.is_lineup_confirmed(
+                    tb, opponent=ta, fixture_id=f.get("fixture_id")
+                ) else "⏳ טרם"
                 card_text += f"\n📋 {f['home']}: {sa}  |  {f['away']}: {sb}"
             cards.append(card_text)
         except Exception as e:
@@ -659,8 +665,9 @@ async def _show_changelog(query):
             lines.append(f"  • {p} ({t})")
 
     # Lineup confirmed
-    if mdl.LINEUP_CONFIRMED:
-        lines.append(f"\n📋 הרכב אושר: {', '.join(k for k, v in mdl.LINEUP_CONFIRMED.items() if v)}")
+    confirmed_lineups = mdl.lineup_confirmed_display()
+    if confirmed_lineups:
+        lines.append(f"\n📋 הרכב אושר: {', '.join(confirmed_lineups)}")
 
     # Extra time
     if mdl.TEAM_EXTRA_TIME:
@@ -729,7 +736,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pending == "upd_lineup":
         t = mdl.find_team(text)
         if t:
-            mdl.LINEUP_CONFIRMED[t] = True
+            mdl.mark_lineup_confirmed(t)
             mdl._save_state()
             await reply(f"📋 הרכב *{t}* סומן כמאושר ✅")
         else:

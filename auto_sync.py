@@ -341,7 +341,7 @@ def _process_lineups(fixture_id: int) -> bool:
     (e.g. lineups not yet published). Callers use this to decide whether the
     fixture has been fully handled or should be retried later.
     """
-    from mundial_2026 import LINEUP_CONFIRMED, injure_player, find_player, TEAMS
+    from mundial_2026 import mark_lineup_confirmed, injure_player, find_player, TEAMS
 
     lineups = _get_fixture_lineups(fixture_id)
     if not lineups:
@@ -349,17 +349,20 @@ def _process_lineups(fixture_id: int) -> bool:
 
     confirmed_any = False
     teams = _known_teams()
+    resolved_sides = []
     for side in lineups:
         api_team = side.get("team", {}).get("name", "")
         team     = _fuzzy_team(api_team, teams)
         if not team:
             continue
+        resolved_sides.append((side, team))
 
+    for side, team in resolved_sides:
         starters = [p["player"]["name"] for p in side.get("startXI", []) if p.get("player")]
         bench    = [p["player"]["name"] for p in side.get("substitutes", []) if p.get("player")]
 
-        # Mark lineup as confirmed
-        LINEUP_CONFIRMED[team] = True
+        opponent = next((other for _, other in resolved_sides if other != team), None)
+        mark_lineup_confirmed(team, opponent=opponent, fixture_id=fixture_id)
         confirmed_any = True
 
         # Cross-check: squad players not in starting XI or bench = absent
