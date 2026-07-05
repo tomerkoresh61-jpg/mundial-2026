@@ -93,10 +93,12 @@ def fetch_betting_odds(fixture_id: Optional[int] = None,
     """
     if not API_KEY:
         return {"source": "Betting Odds", "available": False, "reason": "No API key"}
+    if not fixture_id:
+        return {"source": "Betting Odds", "available": False,
+                "reason": "fixture id required to locate match odds"}
 
     params = {"league": LEAGUE_ID, "season": SEASON, "bet": 1}  # bet=1 = Match Winner
-    if fixture_id:
-        params["fixture"] = fixture_id
+    params["fixture"] = fixture_id
 
     try:
         r = requests.get(f"{API_BASE}/odds", headers={"x-apisports-key": API_KEY},
