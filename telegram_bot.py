@@ -839,6 +839,8 @@ def _apply_intel_item_direct(item: dict):
         mdl.set_fitness(player, int(value))
     elif itype == "injury" and player:
         mdl.injure_player(player)
+    elif itype == "suspension" and player:
+        mdl.suspend_player(player)
     elif itype == "form" and player and value:
         mdl.set_player_form(player, int(value))
     elif itype == "team_form" and team and value:

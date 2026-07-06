@@ -329,6 +329,10 @@ TEAM_RATINGS: dict[str, float] = {
 # Updated via `yellow <player>` command; reset between stages via `clear-yellows`
 YELLOW_CARDS: dict = {}
 
+# One-match suspensions {player_name: {"team": team_name, "matches_remaining": n}};
+# unlike injuries, these are restored automatically after the ban is served.
+SUSPENDED_NEXT_MATCH: dict = {}
+
 # Extra time fatigue {team_name: True} — set when a team played 120 min last round
 # Cleared automatically when update_result is called for that team's next match
 TEAM_EXTRA_TIME: dict = {}
@@ -1529,6 +1533,18 @@ def _load_state():
             TEAM_FORM[team] = frm
     for player, yc in state.get("yellow_cards", {}).items():
         YELLOW_CARDS[player] = yc
+    for player, info in state.get("suspended_next_match", {}).items():
+        if isinstance(info, dict):
+            team = info.get("team")
+            remaining = int(info.get("matches_remaining", 1) or 1)
+        else:
+            team = info
+            remaining = 1
+        if team:
+            SUSPENDED_NEXT_MATCH[player] = {
+                "team": team,
+                "matches_remaining": max(1, remaining),
+            }
     for team, et in state.get("extra_time", {}).items():
         TEAM_EXTRA_TIME[team] = et
     for team, lc in state.get("lineup_confirmed", {}).items():
@@ -1551,6 +1567,7 @@ def _save_state():
                            for pl, data in t["players"].items()},
         "team_form":      dict(TEAM_FORM),
         "yellow_cards":     dict(YELLOW_CARDS),
+        "suspended_next_match": dict(SUSPENDED_NEXT_MATCH),
         "extra_time":       dict(TEAM_EXTRA_TIME),
         "lineup_confirmed": dict(LINEUP_CONFIRMED),
     }
@@ -2449,6 +2466,9 @@ def update_result(team_a, team_b, ga, gb, weight=0.32):
     TEAM_EXTRA_TIME.pop(team_a, None)
     TEAM_EXTRA_TIME.pop(team_b, None)
 
+    _clear_served_suspensions(team_a)
+    _clear_served_suspensions(team_b)
+
     _save_state()
     print(f"\n  ✅ Updated after: {team_a} {ga}–{gb} {team_b}")
     print(f"     {team_a}: attack={TEAMS[team_a]['attack']:.3f}  defense={TEAMS[team_a]['defense']:.3f}  form={TEAM_FORM[team_a]:+d}")
@@ -2469,11 +2489,32 @@ def injure_player(player_name):
     print(f"  ❌ Player '{player_name}' not found.")
 
 
+def suspend_player(player_name, starts_after_current_match=False):
+    """Mark a player unavailable until one suspended match has been recorded."""
+    pfull = find_player(player_name)
+    if not pfull:
+        return
+    for team, tdata in TEAMS.items():
+        if pfull in tdata["players"]:
+            tdata["players"][pfull]["available"] = False
+            SUSPENDED_NEXT_MATCH[pfull] = {
+                "team": team,
+                "matches_remaining": 2 if starts_after_current_match else 1,
+            }
+            _save_state()
+            imp = tdata["players"][pfull]
+            print(f"\n  🟥 {pfull} ({team}) suspended for next match")
+            print(f"     Attack impact: -{imp['attack_imp']*100:.0f}%  "
+                  f"Defense impact: -{imp['defense_imp']*100:.0f}%\n")
+            return
+
+
 def recover_player(player_name):
     """Mark a player as available again."""
     for team, tdata in TEAMS.items():
         if player_name in tdata["players"]:
             tdata["players"][player_name]["available"] = True
+            SUSPENDED_NEXT_MATCH.pop(player_name, None)
             _save_state()
             print(f"\n  ✅ {player_name} ({team}) marked AVAILABLE\n")
             return
@@ -2566,7 +2607,7 @@ def set_fitness(player_name, fitness_pct):
     print(f"  ❌ Player '{player_name}' not found.")
 
 
-def add_yellow_card(player_name):
+def add_yellow_card(player_name, starts_after_current_match=False):
     """
     Record a yellow card for a player.
     At 2 yellow cards in the same stage → automatically marks player UNAVAILABLE.
@@ -2581,9 +2622,33 @@ def add_yellow_card(player_name):
     print(f"\n  🟨 {pfull}: yellow card #{count}")
     if count >= 2:
         print(f"  🚨 2 yellow cards — marking {pfull} SUSPENDED (unavailable)")
-        injure_player(pfull)
+        suspend_player(pfull, starts_after_current_match=starts_after_current_match)
     else:
         print(f"  ⚠️  One more yellow = suspended for next match\n")
+
+
+def _clear_served_suspensions(team_name):
+    """Restore players whose one-match suspension has just been served."""
+    for player, info in list(SUSPENDED_NEXT_MATCH.items()):
+        if isinstance(info, dict):
+            suspended_team = info.get("team")
+            remaining = int(info.get("matches_remaining", 1) or 1)
+        else:
+            suspended_team = info
+            remaining = 1
+        if suspended_team != team_name:
+            continue
+        remaining -= 1
+        if remaining <= 0:
+            if player in TEAMS[team_name]["players"]:
+                TEAMS[team_name]["players"][player]["available"] = True
+            SUSPENDED_NEXT_MATCH.pop(player, None)
+            print(f"  ✅ Suspension served: {player} ({team_name}) available again")
+        else:
+            SUSPENDED_NEXT_MATCH[player] = {
+                "team": team_name,
+                "matches_remaining": remaining,
+            }
 
 
 def clear_yellow_cards():
