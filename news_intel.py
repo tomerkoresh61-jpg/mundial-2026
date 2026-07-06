@@ -269,7 +269,7 @@ def _apply_item(item: dict) -> str:
     Apply a single intel item to mundial_2026 state.
     Returns a human-readable description of what was changed.
     """
-    from mundial_2026 import (set_fitness, injure_player, apply_intel,
+    from mundial_2026 import (set_fitness, injure_player, suspend_player, apply_intel,
                                find_player, SOURCES as M_SOURCES)
     itype  = item.get("type")
     player = item.get("player")
@@ -300,7 +300,7 @@ def _apply_item(item: dict) -> str:
             return f"🤕 Lesión: {resolved_player} marcado como no disponible"
 
     elif itype == "suspension" and resolved_player:
-        injure_player(resolved_player)
+        suspend_player(resolved_player)
         return f"🟥 Suspensión: {resolved_player} marcado como no disponible"
 
     elif itype == "form" and team and direc is not None:

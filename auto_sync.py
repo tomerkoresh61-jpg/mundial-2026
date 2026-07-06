@@ -274,7 +274,7 @@ def _known_teams() -> list[str]:
 
 def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
     """Process live events for a fixture and update mundial_2026 state."""
-    from mundial_2026 import (add_yellow_card, injure_player, update_result,
+    from mundial_2026 import (add_yellow_card, suspend_player, update_result,
                                YELLOW_CARDS, mark_extra_time)
 
     events = _get_fixture_events(fixture_id)
@@ -299,7 +299,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
             if resolved:
                 _sent_events.add(key)
                 yellows_before = YELLOW_CARDS.get(resolved, 0)
-                add_yellow_card(resolved)
+                add_yellow_card(resolved, starts_after_current_match=True)
                 if yellows_before >= 1:
                     msg = (f"🟨 <b>SUSPENSION</b>: {resolved} ha recibido su 2ª amarilla "
                            f"→ suspendido (min {elapsed})")
@@ -313,7 +313,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
             resolved = _fuzzy_player(player)
             if resolved:
                 _sent_events.add(key)
-                injure_player(resolved)   # mark unavailable for next match
+                suspend_player(resolved, starts_after_current_match=True)
                 _notify(f"🟥 <b>Roja</b>: {resolved} expulsado (min {elapsed}) — suspendido siguiente partido")
                 log.info("Red card: %s (min %s)", resolved, elapsed)
 
@@ -472,11 +472,16 @@ def update_elo_after_match(home_team: str, away_team: str,
 
 def _check_finished_matches(upcoming: list[dict]) -> None:
     """Detect matches that just finished; update Elo and notify."""
+    from mundial_2026 import mark_extra_time
+
     for fix in upcoming:
         fid    = fix["fixture_id"]
         status = fix.get("status", "NS")
         if status in ("FT", "AET", "PEN") and fid not in _known_fixture_ids:
             _known_fixture_ids.add(fid)
+            if status in ("AET", "PEN"):
+                mark_extra_time(fix["home"])
+                mark_extra_time(fix["away"])
             hs  = fix.get("home_score")
             as_ = fix.get("away_score")
             hs_str  = str(hs)  if hs  is not None else "?"
