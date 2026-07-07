@@ -436,9 +436,15 @@ def update_elo_after_match(home_team: str, away_team: str,
         log.error("update_elo_after_match: could not import mundial_2026")
         return
 
-    if home_team not in TEAM_RATINGS or away_team not in TEAM_RATINGS:
+    known_teams = list(TEAM_RATINGS.keys())
+    home_rating_team = _fuzzy_team(home_team, known_teams)
+    away_rating_team = _fuzzy_team(away_team, known_teams)
+
+    if not home_rating_team or not away_rating_team:
         log.warning("Elo update skipped: unknown team(s) %s / %s", home_team, away_team)
         return
+
+    home_team, away_team = home_rating_team, away_rating_team
 
     stage = (stage or "group").lower()
     k = 40 if stage in ("r32", "r16", "qf", "sf", "final", "3rd") else 32
