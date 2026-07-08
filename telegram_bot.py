@@ -317,6 +317,24 @@ def build_match_card(team_a: str, team_b: str,
 
     return text, kb_match(team_a, team_b, venue, stage)
 
+
+def _resolve_model_team(team_name: str):
+    resolved = mdl.find_team(team_name, quiet=True) or team_name
+    return resolved if resolved in mdl.TEAMS else None
+
+
+def _build_unresolved_fixture_card(fixture: dict, match_time: str) -> str:
+    venue = fixture.get("venue", "Neutral")
+    city = mdl.VENUES.get(venue, {}).get("city", venue)
+    stage = str(fixture.get("stage", "") or "").upper()
+    stage_line = f"\n🏆 שלב: {stage}" if stage and stage != "GROUP" else ""
+    time_str = f" | {match_time}" if match_time else ""
+    return (
+        f"⚽ *{fixture.get('home', 'TBD')}* 🆚 *{fixture.get('away', 'TBD')}*\n"
+        f"📍 {city}{time_str}{stage_line}\n"
+        "ℹ️ הקבוצות עדיין לא נקבעו; התחזית תופיע כשהשיבוץ יתעדכן."
+    )
+
 # ── Handlers ─────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -588,6 +606,10 @@ async def _show_upcoming(query, days: int):
             except Exception as e:
                 log.warning("On-demand lineup fetch failed for %s vs %s: %s",
                             f["home"], f["away"], e)
+
+        if not (_resolve_model_team(f["home"]) and _resolve_model_team(f["away"])):
+            cards.append(_build_unresolved_fixture_card(f, date_str))
+            continue
 
         try:
             card_text, _ = build_match_card(
