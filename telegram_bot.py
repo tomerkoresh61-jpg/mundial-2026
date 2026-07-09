@@ -319,15 +319,22 @@ def build_match_card(team_a: str, team_b: str,
 
 # ── Handlers ─────────────────────────────────────────────────────
 
+def _clear_pending_conversation(context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
+    _clear_pending_conversation(context)
     mdl._load_state()
     await update.message.reply_text(
         "⚽ *מונדיאל 2026 — מנוע חיזוי*\nבחר פעולה:",
         reply_markup=kb_main(),
         parse_mode=ParseMode.MARKDOWN
     )
+    return ConversationHandler.END
 
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -340,9 +347,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Main menu ──────────────────────────────────────────────
     if data == "main":
+        _clear_pending_conversation(context)
         await _edit(query, "⚽ *מונדיאל 2026 — מנוע חיזוי*\nבחר פעולה:",
                     kb_main())
-        return
+        return ConversationHandler.END
 
     # ── Upcoming matches ───────────────────────────────────────
     if data == "upcoming":
@@ -441,8 +449,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Update menu ────────────────────────────────────────────
     if data == "update_menu":
+        _clear_pending_conversation(context)
         await _edit(query, "🔄 *עדכון מידע*\nבחר פעולה:", kb_update_menu())
-        return
+        return ConversationHandler.END
 
     if data == "upd_clearyellows":
         mdl.clear_yellow_cards()
