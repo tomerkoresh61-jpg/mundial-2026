@@ -493,6 +493,50 @@ def _check_finished_matches(upcoming: list[dict]) -> None:
                 )
 
 
+def _check_scheduled_fixture_updates(days: int = 2) -> list[dict]:
+    """Poll scheduled fixtures for lineup publications and completed matches."""
+    upcoming = get_upcoming_fixtures(days=days)
+    _check_upcoming_lineups(upcoming)
+    _check_finished_matches(upcoming)
+    return upcoming
+
+
+def _process_live_fixtures(live_ids: list[int], upcoming: list[dict]) -> None:
+    # Build a lookup from our upcoming fixtures (hardcoded IDs: 10001+).
+    # Live API IDs (real fixture IDs) won't match hardcoded ones, so
+    # we fall through to the direct fetch — that's intentional.
+    fix_map = {f["fixture_id"]: f for f in upcoming}
+    for fid in live_ids:
+        if fid in fix_map:
+            f = fix_map[fid]
+            _process_events(fid, f["home"], f["away"])
+        else:
+            # API fixture ID not in hardcoded schedule — fetch names directly.
+            data = _get("fixtures", {"id": fid})
+            if data and data.get("response"):
+                item = data["response"][0]
+                home = item["teams"]["home"]["name"]
+                away = item["teams"]["away"]["name"]
+                _process_events(fid, home, away)
+
+
+def _run_sync_iteration() -> int:
+    """Run one sync poll and return the delay before the next iteration."""
+    live_ids = _get_live_fixture_ids()
+
+    if live_ids:
+        _live_fixture_ids.update(live_ids)
+        # Even during live games, other fixtures can enter the lineup
+        # window or finish; keep those scheduled checks running.
+        upcoming = _check_scheduled_fixture_updates(days=2)
+        _process_live_fixtures(live_ids, upcoming)
+        return LIVE_POLL_SEC
+
+    # No live games — check upcoming for lineup window and finished matches
+    _check_scheduled_fixture_updates(days=2)
+    return IDLE_POLL_SEC
+
+
 # ── main sync loop ────────────────────────────────────────────────────────────
 
 def run_sync_loop() -> None:
@@ -509,9 +553,7 @@ def run_sync_loop() -> None:
         # against the hardcoded schedule (status updates need manual bot input).
         while True:
             try:
-                upcoming = get_upcoming_fixtures(days=2)
-                _check_upcoming_lineups(upcoming)
-                _check_finished_matches(upcoming)
+                _check_scheduled_fixture_updates(days=2)
             except Exception as exc:
                 log.error("Idle loop error: %s", exc)
             time.sleep(IDLE_POLL_SEC)
@@ -532,34 +574,7 @@ def run_sync_loop() -> None:
 
     while True:
         try:
-            live_ids = _get_live_fixture_ids()
-
-            if live_ids:
-                _live_fixture_ids.update(live_ids)
-                # Build a lookup from our upcoming fixtures (hardcoded IDs: 10001+).
-                # Live API IDs (real fixture IDs) won't match hardcoded ones, so
-                # we fall through to the direct fetch — that's intentional.
-                upcoming = get_upcoming_fixtures(days=1)
-                fix_map  = {f["fixture_id"]: f for f in upcoming}
-                for fid in live_ids:
-                    if fid in fix_map:
-                        f = fix_map[fid]
-                        _process_events(fid, f["home"], f["away"])
-                    else:
-                        # API fixture ID not in hardcoded schedule — fetch names directly.
-                        data = _get("fixtures", {"id": fid})
-                        if data and data.get("response"):
-                            item = data["response"][0]
-                            home = item["teams"]["home"]["name"]
-                            away = item["teams"]["away"]["name"]
-                            _process_events(fid, home, away)
-                sleep_sec = LIVE_POLL_SEC
-            else:
-                # No live games — check upcoming for lineup window and finished matches
-                upcoming = get_upcoming_fixtures(days=2)
-                _check_upcoming_lineups(upcoming)
-                _check_finished_matches(upcoming)
-                sleep_sec = IDLE_POLL_SEC
+            sleep_sec = _run_sync_iteration()
 
         except Exception as exc:
             log.error("Sync loop error: %s", exc, exc_info=True)
