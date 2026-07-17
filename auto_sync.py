@@ -39,7 +39,8 @@ FIXTURES_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_fixtures.json")
 # Populated by this module; telegram_bot reads these for display.
 _known_fixture_ids: set   = set()   # fixture IDs we've seen
 _live_fixture_ids:  set   = set()   # currently live
-_lineup_checked:    set   = set()   # fixture IDs where we already synced lineup
+_lineup_checked:    set   = set()   # fixture IDs where we already synced both lineups
+_lineups_by_fixture: dict[int, set[str]] = {}  # fixture ID -> confirmed model team names
 _sent_events:       set   = set()   # "fixture_id:event_type:player/team" dedup keys
 
 # ── api-football helpers ──────────────────────────────────────────────────────
@@ -70,6 +71,42 @@ def _norm(s: str) -> str:
     nfkd = unicodedata.normalize("NFKD", s)
     ascii_ = "".join(c for c in nfkd if not unicodedata.combining(c))
     return " ".join(ascii_.lower().split())
+
+
+_VENUE_ALIASES = {
+    "metlife": "MetLife",
+    "att": "ATT",
+    "sofi": "SoFi",
+    "rosebowl": "RoseBowl",
+    "levis": "Levis",
+    "levi": "Levis",
+    "arrowhead": "Arrowhead",
+    "gillette": "Gillette",
+    "lincolnfinancial": "Lincoln",
+    "lincoln": "Lincoln",
+    "hardrock": "HardRock",
+    "lumen": "Lumen",
+    "nrg": "NRG",
+    "mercedesbenz": "Mercedes",
+    "mercedes": "Mercedes",
+    "bmo": "BMO",
+    "bcplace": "BCPlace",
+    "azteca": "Azteca",
+    "akron": "Akron",
+    "guadalajara": "Akron",
+    "bbva": "BBVA",
+}
+
+
+def _normalize_venue_name(api_venue: str) -> str:
+    """Map api-football venue names onto the compact model venue keys."""
+    if not api_venue:
+        return "Neutral"
+    compact = "".join(ch for ch in _norm(api_venue) if ch.isalnum())
+    for needle, model_key in _VENUE_ALIASES.items():
+        if needle in compact:
+            return model_key
+    return api_venue
 
 
 # api-football uses some country names that differ from our model's names.
@@ -199,7 +236,7 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
             for item in data["response"]:
                 fix    = item.get("fixture", {})
                 teams  = item.get("teams", {})
-                venue  = fix.get("venue", {}).get("name", "Neutral")
+                venue  = _normalize_venue_name(fix.get("venue", {}).get("name", "Neutral"))
                 goals  = item.get("goals", {})
                 ko_str = fix.get("date", "")
                 try:
@@ -333,13 +370,14 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
                 log.info("AET detected: %s vs %s", home_api, away_api)
 
 
-def _process_lineups(fixture_id: int) -> bool:
+def _process_lineups(fixture_id: int,
+                     expected_teams: Optional[set[str]] = None) -> bool:
     """
     Sync confirmed lineups into mundial_2026 LINEUP_CONFIRMED.
 
-    Returns True if at least one side's lineup was confirmed, False otherwise
-    (e.g. lineups not yet published). Callers use this to decide whether the
-    fixture has been fully handled or should be retried later.
+    When expected_teams is provided, returns True only after all expected sides
+    for this fixture have been confirmed. Without expected_teams, returns True
+    if at least one side's lineup was confirmed.
     """
     from mundial_2026 import LINEUP_CONFIRMED, injure_player, find_player, TEAMS
 
@@ -348,6 +386,7 @@ def _process_lineups(fixture_id: int) -> bool:
         return False
 
     confirmed_any = False
+    fixture_confirmed = _lineups_by_fixture.setdefault(fixture_id, set())
     teams = _known_teams()
     for side in lineups:
         api_team = side.get("team", {}).get("name", "")
@@ -360,6 +399,7 @@ def _process_lineups(fixture_id: int) -> bool:
 
         # Mark lineup as confirmed
         LINEUP_CONFIRMED[team] = True
+        fixture_confirmed.add(team)
         confirmed_any = True
 
         # Cross-check: squad players not in starting XI or bench = absent
@@ -385,6 +425,8 @@ def _process_lineups(fixture_id: int) -> bool:
             _notify(f"📋 <b>Alineación confirmada — {team}</b>\n{starters_str}")
             log.info("Lineup synced for %s", team)
 
+    if expected_teams:
+        return expected_teams.issubset(fixture_confirmed)
     return confirmed_any
 
 
@@ -404,15 +446,23 @@ def sync_lineups(fixture_id: int) -> bool:
 def _check_upcoming_lineups(upcoming: list[dict]) -> None:
     """For fixtures starting within LINEUP_WINDOW minutes, poll for lineups."""
     now = datetime.now(timezone.utc)
+    teams = _known_teams()
     for fix in upcoming:
         fid = fix["fixture_id"]
         if fid in _lineup_checked:
             continue
         mins_to_ko = (fix["kickoff"] - now).total_seconds() / 60
         if 0 <= mins_to_ko <= LINEUP_WINDOW:
-            # Only mark as handled once a lineup is actually confirmed; otherwise
-            # retry on the next poll (lineups may not be published yet).
-            if _process_lineups(fid):
+            expected = {
+                team for team in (
+                    _fuzzy_team(fix.get("home", ""), teams),
+                    _fuzzy_team(fix.get("away", ""), teams),
+                )
+                if team
+            }
+            # Only mark as handled once both fixture teams are confirmed;
+            # lineup APIs may publish one side several minutes before the other.
+            if _process_lineups(fid, expected if len(expected) == 2 else None):
                 _lineup_checked.add(fid)
 
 
