@@ -15,6 +15,7 @@ import time
 import logging
 import unicodedata
 import difflib
+import re
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -113,6 +114,24 @@ def _fuzzy_player(api_name: str) -> Optional[str]:
         return None
 
 
+def _stage_from_round(round_name: str) -> str:
+    """Normalize api-football round names into model stage identifiers."""
+    lr = _norm(str(round_name or ""))
+    if re.search(r"\b(3rd|third|bronze)\b", lr):
+        return "3rd"
+    if "round of 32" in lr or re.search(r"\b(16th|sixteenth)\s+finals?\b", lr) or re.search(r"\b1/16\s*finals?\b", lr):
+        return "r32"
+    if "round of 16" in lr or re.search(r"\b(8th|eighth)\s+finals?\b", lr) or re.search(r"\b1/8\s*finals?\b", lr):
+        return "r16"
+    if "quarter" in lr or re.search(r"\b1/4\s*finals?\b", lr):
+        return "qf"
+    if "semi" in lr or re.search(r"\b1/2\s*finals?\b", lr):
+        return "sf"
+    if re.search(r"\bfinals?\b", lr):
+        return "final"
+    return "group"
+
+
 # ── Telegram notification ─────────────────────────────────────────────────────
 
 def _notify(text: str) -> None:
@@ -207,14 +226,7 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
                 except Exception:
                     ko = now
 
-                lr    = item.get("league", {}).get("round", "").lower()
-                stage = "group"
-                if "round of 32"  in lr: stage = "r32"
-                elif "round of 16" in lr: stage = "r16"
-                elif "quarter"     in lr: stage = "qf"
-                elif "semi"        in lr: stage = "sf"
-                elif "final"       in lr: stage = "final"
-                elif "third"       in lr: stage = "3rd"
+                stage = _stage_from_round(item.get("league", {}).get("round", ""))
 
                 api_result.append({
                     "fixture_id": fix.get("id"),

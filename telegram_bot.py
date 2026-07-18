@@ -317,6 +317,18 @@ def build_match_card(team_a: str, team_b: str,
 
     return text, kb_match(team_a, team_b, venue, stage)
 
+
+def _fixture_not_started(fixture: dict, now=None) -> bool:
+    """Return True only for scheduled fixtures whose kickoff is still ahead."""
+    if fixture.get("status", "NS") != "NS":
+        return False
+    kickoff = fixture.get("kickoff")
+    if not isinstance(kickoff, datetime):
+        return False
+    if kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+    return kickoff > (now or datetime.now(timezone.utc))
+
 # ── Handlers ─────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,10 +557,12 @@ async def _show_upcoming(query, days: int):
     except Exception:
         fixtures = []
 
+    now = datetime.now(timezone.utc)
+
     # Only show matches that have not started — drop finished/live/postponed
-    # (FT/AET/PEN/1H/HT/2H/PST...) so e.g. an already-played Tunisia vs Japan
-    # does not appear in "upcoming".
-    fixtures = [f for f in fixtures if f.get("status", "NS") == "NS"]
+    # statuses and scheduled fixtures whose kickoff already passed while the
+    # provider still lags at NS.
+    fixtures = [f for f in fixtures if _fixture_not_started(f, now)]
 
     no_matches_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("⚽ חיזוי ספציפי", callback_data="pick_group"),
@@ -565,7 +579,6 @@ async def _show_upcoming(query, days: int):
     label_map = {1: "24 שעות", 3: "3 ימים", 7: "שבוע"}
     range_label = label_map.get(days, f"{days} ימים")
 
-    now = datetime.now(timezone.utc)
     mdl._load_state()
 
     LINEUP_FETCH_WINDOW = 30  # minutes before KO to force a fresh lineup fetch
