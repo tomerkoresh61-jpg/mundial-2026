@@ -2371,8 +2371,8 @@ def simulate_tournament(n=N_SIMS):
         for t in sf:  sc[t] += 1
     print(f"     {n:,}/{n:,} ✅\n")
     return {t: {"champion": cc[t]/n,
-                "finalist": (fc[t]+cc[t])/n,
-                "semifinal":(sc[t]+fc[t]+cc[t])/n}
+                "finalist": fc[t]/n,
+                "semifinal": sc[t]/n}
             for t in TEAMS}
 
 
