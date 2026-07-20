@@ -242,10 +242,22 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
 
 def _get_live_fixture_ids() -> list[int]:
     """Return IDs of currently live WC fixtures."""
-    data = _get("fixtures", {"league": LEAGUE_ID, "season": SEASON, "live": "all"})
+    data = _get("fixtures", {"live": str(LEAGUE_ID)})
     if not data:
         return []
-    return [item["fixture"]["id"] for item in data.get("response", [])]
+    return [
+        item["fixture"]["id"]
+        for item in data.get("response", [])
+        if _is_world_cup_fixture(item)
+    ]
+
+
+def _is_world_cup_fixture(item: dict) -> bool:
+    league = item.get("league") or {}
+    return (
+        league.get("id") == LEAGUE_ID
+        and league.get("season", SEASON) == SEASON
+    )
 
 
 def _get_fixture_events(fixture_id: int) -> list[dict]:
@@ -518,7 +530,7 @@ def run_sync_loop() -> None:
         return  # unreachable but explicit
 
     # Quick check: verify the API plan supports this season for fixture queries.
-    # NOTE: Even if /fixtures is blocked, /fixtures?live=all may still work,
+    # NOTE: Even if /fixtures is blocked, /fixtures?live={league} may still work,
     # and upcoming fixtures fall back to wc2026_fixtures.json — so we do NOT
     # kill the loop on a plan error, we just note it and carry on.
     test = _get("fixtures", {"league": LEAGUE_ID, "season": SEASON, "next": 1})
@@ -527,8 +539,9 @@ def run_sync_loop() -> None:
         if "plan" in err.lower() or "season" in err.lower():
             log.warning("api-football plan does not cover season %s for fixture queries. "
                         "Upcoming schedule served from wc2026_fixtures.json. "
-                        "Live event polling (/fixtures?live=all) will still be attempted.",
-                        SEASON)
+                        "Live event polling (/fixtures?live=%s) will still be attempted.",
+                        SEASON,
+                        LEAGUE_ID)
 
     while True:
         try:
@@ -550,6 +563,9 @@ def run_sync_loop() -> None:
                         data = _get("fixtures", {"id": fid})
                         if data and data.get("response"):
                             item = data["response"][0]
+                            if not _is_world_cup_fixture(item):
+                                log.warning("Skipping non-WC live fixture from API: %s", fid)
+                                continue
                             home = item["teams"]["home"]["name"]
                             away = item["teams"]["away"]["name"]
                             _process_events(fid, home, away)
