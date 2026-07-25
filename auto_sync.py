@@ -41,6 +41,7 @@ _known_fixture_ids: set   = set()   # fixture IDs we've seen
 _live_fixture_ids:  set   = set()   # currently live
 _lineup_checked:    set   = set()   # fixture IDs where we already synced lineup
 _sent_events:       set   = set()   # "fixture_id:event_type:player/team" dedup keys
+_finished_pending_scores: set = set()  # finished fixtures waiting for final scores
 
 # ── api-football helpers ──────────────────────────────────────────────────────
 
@@ -476,21 +477,29 @@ def _check_finished_matches(upcoming: list[dict]) -> None:
         fid    = fix["fixture_id"]
         status = fix.get("status", "NS")
         if status in ("FT", "AET", "PEN") and fid not in _known_fixture_ids:
-            _known_fixture_ids.add(fid)
             hs  = fix.get("home_score")
             as_ = fix.get("away_score")
             hs_str  = str(hs)  if hs  is not None else "?"
             as_str  = str(as_) if as_ is not None else "?"
+            if hs is None or as_ is None:
+                if fid not in _finished_pending_scores:
+                    _finished_pending_scores.add(fid)
+                    _notify(
+                        f"🏁 Partido finalizado: <b>{fix['home']} {hs_str}–{as_str} {fix['away']}</b>\n"
+                        f"Esperando marcador final antes de actualizar Elo."
+                    )
+                continue
+
             _notify(
                 f"🏁 Partido finalizado: <b>{fix['home']} {hs_str}–{as_str} {fix['away']}</b>\n"
                 f"Registra el resultado con el botón Actualizar en el bot."
             )
-            # Auto-update Elo if we have a clean result
-            if hs is not None and as_ is not None:
-                update_elo_after_match(
-                    fix["home"], fix["away"], int(hs), int(as_),
-                    stage=fix.get("stage", "group"),
-                )
+            update_elo_after_match(
+                fix["home"], fix["away"], int(hs), int(as_),
+                stage=fix.get("stage", "group"),
+            )
+            _finished_pending_scores.discard(fid)
+            _known_fixture_ids.add(fid)
 
 
 # ── main sync loop ────────────────────────────────────────────────────────────
