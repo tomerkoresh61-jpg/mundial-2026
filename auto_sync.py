@@ -405,6 +405,10 @@ def _check_upcoming_lineups(upcoming: list[dict]) -> None:
     """For fixtures starting within LINEUP_WINDOW minutes, poll for lineups."""
     now = datetime.now(timezone.utc)
     for fix in upcoming:
+        # Hardcoded fallback fixtures use synthetic IDs that must not be sent to
+        # api-football lineup endpoints.
+        if fix.get("source") != "api":
+            continue
         fid = fix["fixture_id"]
         if fid in _lineup_checked:
             continue
