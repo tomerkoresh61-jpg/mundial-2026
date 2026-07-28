@@ -431,10 +431,12 @@ def update_elo_after_match(home_team: str, away_team: str,
     Ratings are persisted to team_ratings.json immediately.
     """
     try:
-        from mundial_2026 import update_elo_rating, TEAM_RATINGS
+        from mundial_2026 import _load_elo_ratings, update_elo_rating, TEAM_RATINGS
     except ImportError:
         log.error("update_elo_after_match: could not import mundial_2026")
         return
+
+    _load_elo_ratings()
 
     if home_team not in TEAM_RATINGS or away_team not in TEAM_RATINGS:
         log.warning("Elo update skipped: unknown team(s) %s / %s", home_team, away_team)
