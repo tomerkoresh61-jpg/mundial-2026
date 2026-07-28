@@ -1504,6 +1504,7 @@ def consensus_report(our_probs):
 
 def _load_state():
     """Load all saved state (player availability, form, updated parameters)."""
+    _load_elo_ratings()
     if not os.path.exists(STATE_FILE):
         return
     with open(STATE_FILE) as f:
@@ -1533,7 +1534,6 @@ def _load_state():
         TEAM_EXTRA_TIME[team] = et
     for team, lc in state.get("lineup_confirmed", {}).items():
         LINEUP_CONFIRMED[team] = lc
-    _load_elo_ratings()
 
 
 def _save_state():
