@@ -1721,13 +1721,58 @@ def _rest_multiplier(rest_days_a, rest_days_b):
     return factor(rest_days_a), factor(rest_days_b)
 
 
+STAGE_ALIASES = {
+    "group": "group",
+    "group stage": "group",
+    "r32": "r32",
+    "round 32": "r32",
+    "round of 32": "r32",
+    "r16": "r16",
+    "round 16": "r16",
+    "round of 16": "r16",
+    "8th finals": "r16",
+    "eighth finals": "r16",
+    "qf": "qf",
+    "quarter": "qf",
+    "quarter final": "qf",
+    "quarter finals": "qf",
+    "quarterfinal": "qf",
+    "quarterfinals": "qf",
+    "sf": "sf",
+    "semi": "sf",
+    "semi final": "sf",
+    "semi finals": "sf",
+    "semifinal": "sf",
+    "semifinals": "sf",
+    "3rd": "3rd",
+    "third": "3rd",
+    "3rd place": "3rd",
+    "third place": "3rd",
+    "3rd place final": "3rd",
+    "third place final": "3rd",
+    "bronze final": "3rd",
+    "final": "final",
+}
+
+# Single-elimination stages: a draw after 90' cannot be a final result — it is
+# resolved by extra time then penalties.
+KNOCKOUT_STAGES = {"r32", "r16", "qf", "sf", "3rd", "final"}
+
+
+def normalize_stage(stage) -> str:
+    """Map API/CLI/human stage labels to the model's short stage codes."""
+    raw = str(stage or "group").strip().lower()
+    key = " ".join(raw.replace("-", " ").replace("_", " ").replace(".", "").split())
+    return STAGE_ALIASES.get(key, key)
+
+
 def _pressure_multiplier(team_a, team_b, stage="group"):
     """
     Motivation and pressure for each team.
     stage: "group", "r32", "r16", "qf", "sf", "final"
     High pressure_index teams improve; low pressure_index teams may freeze.
     """
-    stage = (stage or "group").lower()
+    stage = normalize_stage(stage)
     stage_pressure = {
         "group": 0.5, "r32": 0.7, "r16": 0.85,
         "qf": 1.0, "sf": 1.15, "3rd": 1.15, "final": 1.3
@@ -1937,7 +1982,7 @@ def expected_goals(team_a, team_b, venue="Neutral",
      10. Set pieces           — dead-ball attack vs defence (new)
      11. Dead rubber          — squad rotation penalty (new)
     """
-    stage = (stage or "group").lower()
+    stage = normalize_stage(stage)
     base_att_a = TEAMS[team_a]["attack"]
     base_def_a = TEAMS[team_a]["defense"]
     base_att_b = TEAMS[team_b]["attack"]
@@ -2040,13 +2085,8 @@ def wdl(P):
     return w, d, l
 
 
-# Single-elimination stages: a draw after 90' cannot be a final result — it is
-# resolved by extra time then penalties.
-KNOCKOUT_STAGES = {"r32", "r16", "qf", "sf", "3rd", "final"}
-
-
 def is_knockout(stage) -> bool:
-    return (stage or "group").lower() in KNOCKOUT_STAGES
+    return normalize_stage(stage) in KNOCKOUT_STAGES
 
 
 def _advancement_probs(team_a, team_b, lam_a, lam_b, w90, d90, l90):
@@ -2096,7 +2136,7 @@ def predict_match(team_a, team_b, venue="Neutral",
         print(f"  ❌ Unknown team(s). Check spelling.")
         return None
 
-    stage = (stage or "group").lower()
+    stage = normalize_stage(stage)
     knockout = is_knockout(stage)
 
     lam_a, lam_b, factors = expected_goals(team_a, team_b, venue, rest_a, rest_b, stage, dead_rubber)
