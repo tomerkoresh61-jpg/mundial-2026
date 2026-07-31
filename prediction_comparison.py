@@ -50,6 +50,9 @@ def fetch_our_prediction(home: str, away: str,
     """Run our own Poisson/Dixon-Coles model and return W/D/L + top scores."""
     import mundial_2026 as mdl
     mdl._load_state()
+    home = mdl.find_team(home, quiet=True) or home
+    away = mdl.find_team(away, quiet=True) or away
+    stage = mdl.normalize_stage(stage)
     lam_a, lam_b, _ = mdl.expected_goals(home, away, venue, stage=stage)
     P = mdl.score_matrix(lam_a, lam_b)
     w, d, l = mdl.wdl(P)
@@ -321,6 +324,9 @@ def compare_match(home: str, away: str,
       warnings: list of discrepancy warning strings.
     """
     import mundial_2026 as mdl
+    home = mdl.find_team(home, quiet=True) or home
+    away = mdl.find_team(away, quiet=True) or away
+    stage = mdl.normalize_stage(stage)
     knockout = mdl.is_knockout(stage)
 
     our   = fetch_our_prediction(home, away, venue, stage)
