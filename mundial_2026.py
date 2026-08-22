@@ -976,21 +976,21 @@ TEAMS = {
 
 H2H_EDGES = {
     # High-confidence edges from recent history
-    frozenset(["Germany",    "England"]):     (1.05, 0.96),  # Germany dominates historically
-    frozenset(["Argentina",  "France"]):      (1.02, 0.99),  # Argentina recent WC final edge
-    frozenset(["Spain",      "France"]):      (1.04, 0.97),  # Spain Nations League 2021
-    frozenset(["Morocco",    "Belgium"]):     (1.06, 0.95),  # WC 2022 shock
-    frozenset(["Morocco",    "Spain"]):       (1.03, 0.98),  # WC 2022 R16
-    frozenset(["Japan",      "Germany"]):     (1.05, 0.96),  # WC 2022
-    frozenset(["Japan",      "Spain"]):       (1.04, 0.97),  # WC 2022
-    frozenset(["South Korea","Germany"]):     (1.04, 0.97),  # WC 2018
-    frozenset(["Saudi Arabia","Argentina"]):  (1.08, 0.93),  # WC 2022 shock
-    frozenset(["Croatia",    "Brazil"]):      (1.05, 0.96),  # WC 2022 QF
-    frozenset(["Croatia",    "Argentina"]):   (0.96, 1.04),  # Argentina won WC SF 2022
-    frozenset(["Uruguay",    "Ghana"]):       (1.04, 0.97),  # WC 2010 QF
-    frozenset(["France",     "Morocco"]):     (1.04, 0.97),  # WC 2022 SF
-    frozenset(["Iran",       "USA"]):         (1.04, 0.97),  # political + WC 2022 tension
-    frozenset(["England",    "USA"]):         (1.02, 0.99),  # WC 2022 group draw
+    ("Germany",    "England"):     (1.05, 0.96),  # Germany dominates historically
+    ("Argentina",  "France"):      (1.02, 0.99),  # Argentina recent WC final edge
+    ("Spain",      "France"):      (1.04, 0.97),  # Spain Nations League 2021
+    ("Morocco",    "Belgium"):     (1.06, 0.95),  # WC 2022 shock
+    ("Morocco",    "Spain"):       (1.03, 0.98),  # WC 2022 R16
+    ("Japan",      "Germany"):     (1.05, 0.96),  # WC 2022
+    ("Japan",      "Spain"):       (1.04, 0.97),  # WC 2022
+    ("South Korea","Germany"):     (1.04, 0.97),  # WC 2018
+    ("Saudi Arabia","Argentina"):  (1.08, 0.93),  # WC 2022 shock
+    ("Croatia",    "Brazil"):      (1.05, 0.96),  # WC 2022 QF
+    ("Croatia",    "Argentina"):   (0.96, 1.04),  # Argentina won WC SF 2022
+    ("Uruguay",    "Ghana"):       (1.04, 0.97),  # WC 2010 QF
+    ("France",     "Morocco"):     (1.04, 0.97),  # WC 2022 SF
+    ("Iran",       "USA"):         (1.04, 0.97),  # political + WC 2022 tension
+    ("England",    "USA"):         (1.02, 0.99),  # WC 2022 group draw
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -1698,11 +1698,13 @@ def _tactical_multiplier(team_a, team_b):
 
 def _h2h_multiplier(team_a, team_b):
     """Returns (mult_a, mult_b) from head-to-head psychological data."""
-    key = frozenset([team_a, team_b])
+    key = (team_a, team_b)
     if key in H2H_EDGES:
-        a_first = list(key)[0] == team_a
-        m1, m2 = H2H_EDGES[key]
-        return (m1, m2) if a_first else (m2, m1)
+        return H2H_EDGES[key]
+    reverse_key = (team_b, team_a)
+    if reverse_key in H2H_EDGES:
+        m_b, m_a = H2H_EDGES[reverse_key]
+        return m_a, m_b
     return (1.0, 1.0)
 
 
