@@ -324,6 +324,7 @@ TEAM_RATINGS: dict[str, float] = {
     "Haiti":         1365.0,
     "Iraq":          1360.0,
 }
+INITIAL_TEAM_RATINGS = dict(TEAM_RATINGS)
 
 # Yellow card accumulation per player {player_name: card_count}
 # Updated via `yellow <player>` command; reset between stages via `clear-yellows`
@@ -1809,6 +1810,26 @@ def _market_value_multiplier(team_a, team_b):
     return mult(team_a), mult(team_b)
 
 
+def _elo_delta_multiplier(team_name):
+    """
+    Live Elo movement from the bundled baseline.
+
+    Base attack/defense already encode pre-tournament strength, so only the
+    persisted rating delta from auto_sync.update_elo_after_match() is applied.
+    A 100-point live Elo move is worth about a 6% attack swing and the inverse
+    defensive swing (lower defense multiplier is better in this model).
+    """
+    baseline = INITIAL_TEAM_RATINGS.get(team_name)
+    current = TEAM_RATINGS.get(team_name)
+    if baseline is None or current is None:
+        return 1.0, 1.0
+
+    delta = current - baseline
+    attack_mult = float(np.clip(10 ** (delta / 4000.0), 0.88, 1.14))
+    defense_mult = float(np.clip(1.0 / attack_mult, 0.88, 1.14))
+    return attack_mult, defense_mult
+
+
 def update_elo_rating(winner: str, loser: str, is_draw: bool = False,
                       k: int = 32) -> tuple[float, float]:
     """
@@ -1938,6 +1959,7 @@ def expected_goals(team_a, team_b, venue="Neutral",
       9. Home crowd           — host-nation stadium boost (new)
      10. Set pieces           — dead-ball attack vs defence (new)
      11. Dead rubber          — squad rotation penalty (new)
+     12. Live Elo             — auto-synced rating movement from baseline
     """
     stage = (stage or "group").lower()
     base_att_a = TEAMS[team_a]["attack"]
@@ -1982,16 +2004,20 @@ def expected_goals(team_a, team_b, venue="Neutral",
     # 11 — Market value (squad financial depth proxy)
     mv_a, mv_b = _market_value_multiplier(team_a, team_b)
 
+    # 12 — Live Elo movement from auto-sync
+    elo_att_a, elo_def_a = _elo_delta_multiplier(team_a)
+    elo_att_b, elo_def_b = _elo_delta_multiplier(team_b)
+
     # Combine: attack of A vs defence of B
     eff_att_a = (base_att_a * sq_att_a * env_att_a
                  * tac_a * h2h_a * rest_fa * pres_a * form_a
-                 * crowd_a * sp_a * dr_a * mv_a)
-    eff_def_b = base_def_b * sq_def_b * env_def_b
+                 * crowd_a * sp_a * dr_a * mv_a * elo_att_a)
+    eff_def_b = base_def_b * sq_def_b * env_def_b * elo_def_b
 
     eff_att_b = (base_att_b * sq_att_b * env_att_b
                  * tac_b * h2h_b * rest_fb * pres_b * form_b
-                 * crowd_b * sp_b * dr_b * mv_b)
-    eff_def_a = base_def_a * sq_def_a * env_def_a
+                 * crowd_b * sp_b * dr_b * mv_b * elo_att_b)
+    eff_def_a = base_def_a * sq_def_a * env_def_a * elo_def_a
 
     lam_a = max(0.15, min(BASE_GOALS * eff_att_a * eff_def_b, 6.0))
     lam_b = max(0.15, min(BASE_GOALS * eff_att_b * eff_def_a, 6.0))
@@ -2005,6 +2031,8 @@ def expected_goals(team_a, team_b, venue="Neutral",
         "crowd":    (crowd_a, crowd_b),      "setpiece": (sp_a, sp_b),
         "dead_rubber": (dr_a, dr_b),         "extra_time": (et_a, et_b),
         "market_value": (mv_a, mv_b),
+        "elo_attack": (elo_att_a, elo_att_b),
+        "elo_defense": (elo_def_a, elo_def_b),
     }
     return lam_a, lam_b, factors
 
