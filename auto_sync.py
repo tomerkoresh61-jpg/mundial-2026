@@ -32,6 +32,7 @@ SEASON         = 2026
 LIVE_POLL_SEC  = 60         # poll live fixtures every 60 s
 IDLE_POLL_SEC  = 300        # poll upcoming fixtures every 5 min when no live game
 LINEUP_WINDOW  = 90         # minutes before KO to start polling for lineups
+FINISHED_LOOKBACK_HOURS = 48  # finished-match sweep window for missed polls
 API_BASE       = "https://v3.football.api-sports.io"
 FIXTURES_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_fixtures.json")
 
@@ -104,11 +105,14 @@ def _fuzzy_team(api_name: str, known_teams: list[str]) -> Optional[str]:
     return norm_map[matches[0]] if matches else None
 
 
-def _fuzzy_player(api_name: str) -> Optional[str]:
+def _fuzzy_player(api_name: str, team: Optional[str] = None) -> Optional[str]:
     """Match api name against players known to mundial_2026."""
     try:
-        from mundial_2026 import find_player
-        return find_player(api_name, quiet=True)
+        from mundial_2026 import find_player, TEAMS
+        resolved = find_player(api_name, quiet=True)
+        if team and resolved and resolved not in TEAMS.get(team, {}).get("players", {}):
+            return None
+        return resolved
     except Exception:
         return None
 
@@ -169,7 +173,7 @@ def _load_hardcoded_fixtures() -> list[dict]:
     return result
 
 
-def get_upcoming_fixtures(days: int = 1) -> list[dict]:
+def get_upcoming_fixtures(days: int = 1, include_past_hours: int = 0) -> list[dict]:
     """
     Return upcoming fixtures within `days` days from now.
 
@@ -182,6 +186,7 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
       status, home_score, away_score, elapsed, [source]
     """
     now   = datetime.now(timezone.utc)
+    since = now - timedelta(hours=include_past_hours)
     until = now + timedelta(days=days)
 
     # ── 1. Try the API ────────────────────────────────────────
@@ -190,7 +195,7 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
         data = _get("fixtures", {
             "league":   LEAGUE_ID,
             "season":   SEASON,
-            "from":     now.strftime("%Y-%m-%d"),
+            "from":     since.strftime("%Y-%m-%d"),
             "to":       until.strftime("%Y-%m-%d"),
             "timezone": "UTC",
         })
@@ -237,7 +242,7 @@ def get_upcoming_fixtures(days: int = 1) -> list[dict]:
     # ── 2. Fallback: hardcoded schedule ───────────────────────
     log.info("API unavailable or no data — using hardcoded wc2026_fixtures.json")
     all_fixtures = _load_hardcoded_fixtures()
-    return [f for f in all_fixtures if now <= f["kickoff"] <= until]
+    return [f for f in all_fixtures if since <= f["kickoff"] <= until]
 
 
 def _get_live_fixture_ids() -> list[int]:
@@ -298,6 +303,8 @@ def _process_events(fixture_id: int, home_api: str, away_api: str,
         detail = ev.get("detail", "")
         player = (ev.get("player") or {}).get("name", "")
         assist = (ev.get("assist") or {}).get("name", "")   # for substitution target
+        api_event_team = (ev.get("team") or {}).get("name", "")
+        event_team = _fuzzy_team(api_event_team, teams) if api_event_team else None
         elapsed = ev.get("time", {}).get("elapsed", 0) or 0
         extra   = ev.get("time", {}).get("extra",   0) or 0
 
@@ -308,7 +315,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str,
 
         # ── Yellow card ───────────────────────────────────────────────────────
         if etype == "Card" and detail == "Yellow Card" and player:
-            resolved = _fuzzy_player(player)
+            resolved = _fuzzy_player(player, event_team)
             if resolved:
                 _sent_events.add(key)
                 yellows_before = YELLOW_CARDS.get(resolved, 0)
@@ -323,7 +330,7 @@ def _process_events(fixture_id: int, home_api: str, away_api: str,
 
         # ── Red card ──────────────────────────────────────────────────────────
         elif etype == "Card" and "Red" in detail and player:
-            resolved = _fuzzy_player(player)
+            resolved = _fuzzy_player(player, event_team)
             if resolved:
                 _sent_events.add(key)
                 injure_player(resolved)   # mark unavailable for next match
@@ -522,7 +529,8 @@ def run_sync_loop() -> None:
         # against the hardcoded schedule (status updates need manual bot input).
         while True:
             try:
-                upcoming = get_upcoming_fixtures(days=2)
+                upcoming = get_upcoming_fixtures(
+                    days=2, include_past_hours=FINISHED_LOOKBACK_HOURS)
                 _check_upcoming_lineups(upcoming)
                 _check_finished_matches(upcoming)
             except Exception as exc:
@@ -570,7 +578,8 @@ def run_sync_loop() -> None:
                 sleep_sec = LIVE_POLL_SEC
             else:
                 # No live games — check upcoming for lineup window and finished matches
-                upcoming = get_upcoming_fixtures(days=2)
+                upcoming = get_upcoming_fixtures(
+                    days=2, include_past_hours=FINISHED_LOOKBACK_HOURS)
                 _check_upcoming_lineups(upcoming)
                 _check_finished_matches(upcoming)
                 sleep_sec = IDLE_POLL_SEC
