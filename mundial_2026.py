@@ -325,6 +325,11 @@ TEAM_RATINGS: dict[str, float] = {
     "Iraq":          1360.0,
 }
 
+# Immutable calibration point for the live Elo layer. TEAM_RATINGS is mutable
+# and may be reloaded from team_ratings.json; prediction impact should come from
+# drift since these initial ratings, not from double-counting the base strength.
+BASE_TEAM_RATINGS: dict[str, float] = dict(TEAM_RATINGS)
+
 # Yellow card accumulation per player {player_name: card_count}
 # Updated via `yellow <player>` command; reset between stages via `clear-yellows`
 YELLOW_CARDS: dict = {}
@@ -1807,6 +1812,24 @@ def _market_value_multiplier(team_a, team_b):
     return mult(team_a), mult(team_b)
 
 
+def _elo_rating_multiplier(team_a, team_b):
+    """
+    Live Elo adjustment from ratings that auto_sync persists after finished
+    matches. Only rating drift relative to the initial calibration is applied,
+    so the base attack/defense ratings remain the source of pre-tournament
+    strength and Elo updates move predictions after real results.
+    """
+    base_a = BASE_TEAM_RATINGS.get(team_a, 1500.0)
+    base_b = BASE_TEAM_RATINGS.get(team_b, 1500.0)
+    live_a = TEAM_RATINGS.get(team_a, base_a)
+    live_b = TEAM_RATINGS.get(team_b, base_b)
+    base_gap = base_a - base_b
+    live_gap = live_a - live_b
+    drift = max(-160.0, min(160.0, live_gap - base_gap))
+    mult_a = 10 ** (drift / 1600.0)
+    return mult_a, 1.0 / mult_a
+
+
 def update_elo_rating(winner: str, loser: str, is_draw: bool = False,
                       k: int = 32) -> tuple[float, float]:
     """
@@ -1933,9 +1956,10 @@ def expected_goals(team_a, team_b, venue="Neutral",
       6. Rest / fatigue       — rest days + extra-time carry-over
       7. Pressure/motivation  — stage pressure × pressure_index
       8. Team form            — recent tournament results
-      9. Home crowd           — host-nation stadium boost (new)
-     10. Set pieces           — dead-ball attack vs defence (new)
-     11. Dead rubber          — squad rotation penalty (new)
+      9. Live Elo drift       — auto-synced rating movement after results
+     10. Home crowd           — host-nation stadium boost (new)
+     11. Set pieces           — dead-ball attack vs defence (new)
+     12. Dead rubber          — squad rotation penalty (new)
     """
     stage = (stage or "group").lower()
     base_att_a = TEAMS[team_a]["attack"]
@@ -1968,27 +1992,30 @@ def expected_goals(team_a, team_b, venue="Neutral",
     # 7 — Team form
     form_a, form_b = _form_multiplier(team_a, team_b)
 
-    # 8 — Home crowd
+    # 8 — Live Elo drift
+    elo_a, elo_b = _elo_rating_multiplier(team_a, team_b)
+
+    # 9 — Home crowd
     crowd_a, crowd_b = _home_crowd_multiplier(team_a, team_b, venue)
 
-    # 9 — Set pieces
+    # 10 — Set pieces
     sp_a, sp_b = _set_piece_multiplier(team_a, team_b)
 
-    # 10 — Dead rubber
+    # 11 — Dead rubber
     dr_a, dr_b = _dead_rubber_multiplier(dead_rubber)
 
-    # 11 — Market value (squad financial depth proxy)
+    # 12 — Market value (squad financial depth proxy)
     mv_a, mv_b = _market_value_multiplier(team_a, team_b)
 
     # Combine: attack of A vs defence of B
     eff_att_a = (base_att_a * sq_att_a * env_att_a
                  * tac_a * h2h_a * rest_fa * pres_a * form_a
-                 * crowd_a * sp_a * dr_a * mv_a)
+                 * elo_a * crowd_a * sp_a * dr_a * mv_a)
     eff_def_b = base_def_b * sq_def_b * env_def_b
 
     eff_att_b = (base_att_b * sq_att_b * env_att_b
                  * tac_b * h2h_b * rest_fb * pres_b * form_b
-                 * crowd_b * sp_b * dr_b * mv_b)
+                 * elo_b * crowd_b * sp_b * dr_b * mv_b)
     eff_def_a = base_def_a * sq_def_a * env_def_a
 
     lam_a = max(0.15, min(BASE_GOALS * eff_att_a * eff_def_b, 6.0))
@@ -1999,7 +2026,7 @@ def expected_goals(team_a, team_b, venue="Neutral",
         "env_a":    (env_att_a, env_def_a), "env_b":    (env_att_b, env_def_b),
         "tactical": (tac_a, tac_b),         "h2h":      (h2h_a, h2h_b),
         "rest":     (rest_fa, rest_fb),      "pressure": (pres_a, pres_b),
-        "form":     (form_a, form_b),
+        "form":     (form_a, form_b),        "elo":      (elo_a, elo_b),
         "crowd":    (crowd_a, crowd_b),      "setpiece": (sp_a, sp_b),
         "dead_rubber": (dr_a, dr_b),         "extra_time": (et_a, et_b),
         "market_value": (mv_a, mv_b),
@@ -2233,13 +2260,20 @@ def predict_match(team_a, team_b, venue="Neutral",
         return scores[0]
 
     if knockout:
-        # Single-elimination: no draw pick — recommend who advances (incl. ET + pens).
-        if p_adv_a >= p_adv_b:
+        adv_team, adv_prob = ((team_a, p_adv_a) if p_adv_a >= p_adv_b
+                              else (team_b, p_adv_b))
+        adv_label = f"{adv_team} to advance ({adv_prob*100:.0f}%)"
+        # Tournament score entries are still 90-minute scores in knockout ties;
+        # keep a draw pick when regulation draw is the likely W/D/L outcome.
+        if w < FAVOR_THRESHOLD and l < FAVOR_THRESHOLD and d >= DRAW_THRESHOLD:
+            tp = _best_score_for_outcome('draw')
+            tp_label = f"Draw; {adv_label}"
+        elif p_adv_a >= p_adv_b:
             tp = _best_score_for_outcome('a')
-            tp_label = f"{team_a} to advance ({p_adv_a*100:.0f}%)"
+            tp_label = adv_label
         else:
             tp = _best_score_for_outcome('b')
-            tp_label = f"{team_b} to advance ({p_adv_b*100:.0f}%)"
+            tp_label = adv_label
     elif w >= FAVOR_THRESHOLD and w >= l:
         tp = _best_score_for_outcome('a')
         tp_label = f"{team_a} win"
