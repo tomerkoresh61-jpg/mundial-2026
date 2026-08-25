@@ -266,11 +266,17 @@ def build_match_card(team_a: str, team_b: str,
         return scores[0]
 
     if knockout:
-        # Single-elimination: no draw pick — recommend who advances (incl. ET + pens).
-        if p_adv_a >= p_adv_b:
-            tp = _best_for('a'); tp_label = f"{team_a} מעפילה ({p_adv_a*100:.0f}%)"
+        adv_team, adv_prob = ((team_a, p_adv_a) if p_adv_a >= p_adv_b
+                              else (team_b, p_adv_b))
+        adv_label = f"{adv_team} מעפילה ({adv_prob*100:.0f}%)"
+        # Tournament score entries are still 90-minute scores in knockout ties;
+        # keep a draw pick when regulation draw is the likely W/D/L outcome.
+        if w < 0.40 and l < 0.40 and d >= 0.28:
+            tp = _best_for('draw'); tp_label = f"תיקו; {adv_label}"
+        elif p_adv_a >= p_adv_b:
+            tp = _best_for('a'); tp_label = adv_label
         else:
-            tp = _best_for('b'); tp_label = f"{team_b} מעפילה ({p_adv_b*100:.0f}%)"
+            tp = _best_for('b'); tp_label = adv_label
     elif w >= 0.40 and w >= l:
         tp = _best_for('a'); tp_label = f"ניצחון {team_a}"
     elif l >= 0.40 and l > w:

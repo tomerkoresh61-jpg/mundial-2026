@@ -144,7 +144,27 @@ def fetch_betting_odds(fixture_id: Optional[int] = None,
 
 # ── To-qualify market (knockout advancement) ──────────────────────────
 
-_QUALIFY_KEYWORDS = ("qualif", "to advance", "advance", "to reach", "to win the tie")
+_QUALIFY_BET_IDS = {61}
+_QUALIFY_KEYWORDS = ("qualif", "to advance", "to win the tie")
+
+
+def _is_qualify_market(bet: dict) -> bool:
+    try:
+        bet_id = int(bet.get("id"))
+    except (TypeError, ValueError):
+        bet_id = None
+    if bet_id in _QUALIFY_BET_IDS:
+        return True
+    name = (bet.get("name") or "").lower()
+    return any(k in name for k in _QUALIFY_KEYWORDS)
+
+
+def _parse_positive_odd(value: dict) -> Optional[float]:
+    try:
+        odd = float(value.get("odd"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return odd if odd > 0 else None
 
 
 def list_odds_markets(fixture_id: int) -> list:
@@ -199,33 +219,45 @@ def fetch_qualify_odds(fixture_id: Optional[int] = None,
         return {"source": "To Qualify Odds", "available": False,
                 "reason": str(data["errors"])}
 
+    candidates = []
     for item in data.get("response", []):
         for bm in item.get("bookmakers", []):
             for bet in bm.get("bets", []):
-                name = (bet.get("name") or "").lower()
-                vals = bet.get("values", [])
-                if not any(k in name for k in _QUALIFY_KEYWORDS):
-                    continue
-                if len(vals) != 2:
-                    continue
-                # Two-way market: map by Home/Away label, else by order.
-                lut = {str(v.get("value", "")).lower(): float(v["odd"]) for v in vals}
-                h_odd = lut.get("home") or lut.get(home.lower())
-                a_odd = lut.get("away") or lut.get(away.lower())
-                if not (h_odd and a_odd):
-                    odds_in_order = [float(v["odd"]) for v in vals]
-                    h_odd, a_odd = odds_in_order[0], odds_in_order[1]
-                raw_h, raw_a = 1 / h_odd, 1 / a_odd
-                total = raw_h + raw_a
-                return {
-                    "source": "To Qualify Odds",
-                    "bookmaker": bm.get("name", "unknown"),
-                    "bet_name": bet.get("name"),
-                    "bet_id": bet.get("id"),
-                    "p_adv_home": round(raw_h / total, 3),
-                    "p_adv_away": round(raw_a / total, 3),
-                    "available": True,
-                }
+                if _is_qualify_market(bet):
+                    try:
+                        bet_id = int(bet.get("id"))
+                    except (TypeError, ValueError):
+                        bet_id = None
+                    priority = 0 if bet_id in _QUALIFY_BET_IDS else 1
+                    candidates.append((priority, bm, bet))
+
+    for _, bm, bet in sorted(candidates, key=lambda x: x[0]):
+        vals = bet.get("values", [])
+        if len(vals) != 2:
+            continue
+        # Two-way market: map by Home/Away label, else by order.
+        lut = {
+            str(v.get("value", "")).lower(): _parse_positive_odd(v)
+            for v in vals
+        }
+        h_odd = lut.get("home") or lut.get(home.lower())
+        a_odd = lut.get("away") or lut.get(away.lower())
+        if not (h_odd and a_odd):
+            odds_in_order = [_parse_positive_odd(v) for v in vals]
+            if any(odd is None for odd in odds_in_order):
+                continue
+            h_odd, a_odd = odds_in_order[0], odds_in_order[1]
+        raw_h, raw_a = 1 / h_odd, 1 / a_odd
+        total = raw_h + raw_a
+        return {
+            "source": "To Qualify Odds",
+            "bookmaker": bm.get("name", "unknown"),
+            "bet_name": bet.get("name"),
+            "bet_id": bet.get("id"),
+            "p_adv_home": round(raw_h / total, 3),
+            "p_adv_away": round(raw_a / total, 3),
+            "available": True,
+        }
 
     return {"source": "To Qualify Odds", "available": False,
             "reason": "No to-qualify market published yet"}

@@ -2260,13 +2260,20 @@ def predict_match(team_a, team_b, venue="Neutral",
         return scores[0]
 
     if knockout:
-        # Single-elimination: no draw pick — recommend who advances (incl. ET + pens).
-        if p_adv_a >= p_adv_b:
+        adv_team, adv_prob = ((team_a, p_adv_a) if p_adv_a >= p_adv_b
+                              else (team_b, p_adv_b))
+        adv_label = f"{adv_team} to advance ({adv_prob*100:.0f}%)"
+        # Tournament score entries are still 90-minute scores in knockout ties;
+        # keep a draw pick when regulation draw is the likely W/D/L outcome.
+        if w < FAVOR_THRESHOLD and l < FAVOR_THRESHOLD and d >= DRAW_THRESHOLD:
+            tp = _best_score_for_outcome('draw')
+            tp_label = f"Draw; {adv_label}"
+        elif p_adv_a >= p_adv_b:
             tp = _best_score_for_outcome('a')
-            tp_label = f"{team_a} to advance ({p_adv_a*100:.0f}%)"
+            tp_label = adv_label
         else:
             tp = _best_score_for_outcome('b')
-            tp_label = f"{team_b} to advance ({p_adv_b*100:.0f}%)"
+            tp_label = adv_label
     elif w >= FAVOR_THRESHOLD and w >= l:
         tp = _best_score_for_outcome('a')
         tp_label = f"{team_a} win"
