@@ -272,7 +272,20 @@ def _known_teams() -> list[str]:
         return []
 
 
-def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
+EXTRA_TIME_STATUSES = {"ET", "AET", "PEN", "BT"}
+
+
+def _is_extra_time_event(match_status: str, elapsed: int) -> bool:
+    status = (match_status or "").upper()
+    if status in EXTRA_TIME_STATUSES:
+        return True
+    # Without a status hint, only treat events after the first extra-time period
+    # as definitive. 91-105 is ambiguous with second-half stoppage time.
+    return elapsed > 105
+
+
+def _process_events(fixture_id: int, home_api: str, away_api: str,
+                    match_status: str = "") -> None:
     """Process live events for a fixture and update mundial_2026 state."""
     from mundial_2026 import (add_yellow_card, injure_player, update_result,
                                YELLOW_CARDS, mark_extra_time)
@@ -317,8 +330,8 @@ def _process_events(fixture_id: int, home_api: str, away_api: str) -> None:
                 _notify(f"🟥 <b>Roja</b>: {resolved} expulsado (min {elapsed}) — suspendido siguiente partido")
                 log.info("Red card: %s (min %s)", resolved, elapsed)
 
-        # ── AET detection (extra time elapsed > 90) ───────────────────────────
-        elif etype in ("Goal", "subst") and elapsed > 90:
+        # ── AET detection ────────────────────────────────────────────────────
+        elif etype in ("Goal", "subst") and _is_extra_time_event(match_status, elapsed):
             # Match went to extra time — mark both teams
             home_team = _fuzzy_team(home_api, teams)
             away_team = _fuzzy_team(away_api, teams)
@@ -544,7 +557,7 @@ def run_sync_loop() -> None:
                 for fid in live_ids:
                     if fid in fix_map:
                         f = fix_map[fid]
-                        _process_events(fid, f["home"], f["away"])
+                        _process_events(fid, f["home"], f["away"], f.get("status", ""))
                     else:
                         # API fixture ID not in hardcoded schedule — fetch names directly.
                         data = _get("fixtures", {"id": fid})
@@ -552,7 +565,8 @@ def run_sync_loop() -> None:
                             item = data["response"][0]
                             home = item["teams"]["home"]["name"]
                             away = item["teams"]["away"]["name"]
-                            _process_events(fid, home, away)
+                            status = item.get("fixture", {}).get("status", {}).get("short", "")
+                            _process_events(fid, home, away, status)
                 sleep_sec = LIVE_POLL_SEC
             else:
                 # No live games — check upcoming for lineup window and finished matches
