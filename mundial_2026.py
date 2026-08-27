@@ -2626,7 +2626,7 @@ def apply_match_wear(team_name, wear_per_match=0.03):
     for player, data in TEAMS[team_name]["players"].items():
         if data.get("fitness", 1.0) < 0.90 and data["available"]:
             old = data["fitness"]
-            data["fitness"] = max(0.30, old - wear_per_match)
+            data["fitness"] = min(old, max(0.30, old - wear_per_match))
             affected.append((player, old, data["fitness"]))
     if affected:
         print(f"  📉 Tournament wear applied to {team_name}:")
