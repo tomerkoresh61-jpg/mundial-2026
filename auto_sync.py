@@ -264,6 +264,16 @@ def _get_fixture_lineups(fixture_id: int) -> list[dict]:
 
 # ── event processing ──────────────────────────────────────────────────────────
 
+def _lineup_player_names(entries: list[dict]) -> list[str]:
+    """Extract usable player names from api-football lineup entries."""
+    names = []
+    for entry in entries:
+        player = entry.get("player") or {}
+        name = player.get("name")
+        if name:
+            names.append(name)
+    return names
+
 def _known_teams() -> list[str]:
     try:
         from mundial_2026 import TEAMS
@@ -355,8 +365,14 @@ def _process_lineups(fixture_id: int) -> bool:
         if not team:
             continue
 
-        starters = [p["player"]["name"] for p in side.get("startXI", []) if p.get("player")]
-        bench    = [p["player"]["name"] for p in side.get("substitutes", []) if p.get("player")]
+        starters = _lineup_player_names(side.get("startXI", []))
+        bench    = _lineup_player_names(side.get("substitutes", []))
+        if len(starters) < 11:
+            log.info(
+                "Lineup payload for %s has only %d starters; leaving unconfirmed",
+                team, len(starters),
+            )
+            continue
 
         # Mark lineup as confirmed
         LINEUP_CONFIRMED[team] = True
