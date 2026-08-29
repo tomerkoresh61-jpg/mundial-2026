@@ -38,6 +38,7 @@ FIXTURES_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_fixtures.json")
 # ── shared state (imported by mundial_2026 functions) ─────────────────────────
 # Populated by this module; telegram_bot reads these for display.
 _known_fixture_ids: set   = set()   # fixture IDs we've seen
+_known_finished_match_keys: set = set()  # stable finished-match keys across API/fallback IDs
 _live_fixture_ids:  set   = set()   # currently live
 _lineup_checked:    set   = set()   # fixture IDs where we already synced lineup
 _sent_events:       set   = set()   # "fixture_id:event_type:player/team" dedup keys
@@ -167,6 +168,47 @@ def _load_hardcoded_fixtures() -> list[dict]:
     result.sort(key=lambda x: x["kickoff"])
     log.debug("Loaded %d hardcoded fixtures from wc2026_fixtures.json", len(result))
     return result
+
+
+def _fixture_kickoff_date(fix: dict) -> Optional[str]:
+    """Return the UTC kickoff date used to identify the same match across sources."""
+    kickoff = fix.get("kickoff")
+    if isinstance(kickoff, datetime):
+        if kickoff.tzinfo is not None:
+            kickoff = kickoff.astimezone(timezone.utc)
+        return kickoff.date().isoformat()
+    if isinstance(kickoff, str) and kickoff:
+        try:
+            parsed = datetime.fromisoformat(kickoff.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.date().isoformat()
+    return None
+
+
+def _canonical_team_key(name: str, known_teams: list[str]) -> Optional[str]:
+    raw = str(name or "").strip()
+    if not raw or raw in {"?", "TBD"}:
+        return None
+    return _norm(_fuzzy_team(raw, known_teams) or raw)
+
+
+def _finished_match_key(fix: dict) -> Optional[str]:
+    """
+    Stable identity for a completed match.
+
+    api-football IDs and hardcoded fallback IDs intentionally differ, so finished
+    match side effects need a source-independent dedupe key.
+    """
+    known_teams = _known_teams()
+    kickoff_date = _fixture_kickoff_date(fix)
+    home = _canonical_team_key(fix.get("home", ""), known_teams)
+    away = _canonical_team_key(fix.get("away", ""), known_teams)
+    if not (kickoff_date and home and away):
+        return None
+    return f"{kickoff_date}:{home}:{away}"
 
 
 def get_upcoming_fixtures(days: int = 1) -> list[dict]:
@@ -475,8 +517,15 @@ def _check_finished_matches(upcoming: list[dict]) -> None:
     for fix in upcoming:
         fid    = fix["fixture_id"]
         status = fix.get("status", "NS")
-        if status in ("FT", "AET", "PEN") and fid not in _known_fixture_ids:
+        match_key = _finished_match_key(fix) if status in ("FT", "AET", "PEN") else None
+        already_processed = (
+            fid in _known_fixture_ids
+            or match_key in _known_finished_match_keys
+        )
+        if status in ("FT", "AET", "PEN") and not already_processed:
             _known_fixture_ids.add(fid)
+            if match_key:
+                _known_finished_match_keys.add(match_key)
             hs  = fix.get("home_score")
             as_ = fix.get("away_score")
             hs_str  = str(hs)  if hs  is not None else "?"
