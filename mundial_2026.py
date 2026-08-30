@@ -1617,7 +1617,7 @@ def _squad_multiplier(team_name):
             remaining_att = data["attack_imp"]  * (fitness ** att_exp)
             remaining_def = data["defense_imp"] * (fitness ** def_exp)
             attack_reduction  -= remaining_att * (form_mod - 1.0)
-            defense_reduction -= remaining_def * (form_mod - 1.0) * (-1)
+            defense_reduction -= remaining_def * (form_mod - 1.0)
 
     att_mult = max(0.40, 1.0 - attack_reduction)
     def_mult = max(0.60, 1.0 + defense_reduction)  # higher = worse defense
