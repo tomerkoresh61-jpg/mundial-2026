@@ -2423,6 +2423,11 @@ def predict_top_scorers(tournament_probs=None, n=20_000):
 
 def update_result(team_a, team_b, ga, gb, weight=0.32):
     """Bayesian-style parameter update after a real match result."""
+    if not isinstance(ga, int) or not isinstance(gb, int):
+        raise ValueError("Goals must be integers.")
+    if ga < 0 or gb < 0:
+        raise ValueError("Goals must be non-negative.")
+
     lam_a, lam_b, _ = expected_goals(team_a, team_b)
     ra = ga / max(lam_a, 0.01)
     rb = gb / max(lam_b, 0.01)
