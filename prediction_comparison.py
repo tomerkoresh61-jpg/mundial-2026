@@ -115,12 +115,23 @@ def fetch_betting_odds(fixture_id: Optional[int] = None,
         return {"source": "Betting Odds", "available": False,
                 "reason": "No odds data returned"}
 
+    def _odd_value(value: dict) -> Optional[float]:
+        try:
+            odd = float(value["odd"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return odd if odd > 0 else None
+
     # Find the first bookmaker with Match Winner market
     for item in response:
         for bm in item.get("bookmakers", []):
             for bet in bm.get("bets", []):
                 if bet.get("id") == 1:  # Match Winner
-                    vals = {v["value"]: float(v["odd"]) for v in bet.get("values", [])}
+                    vals = {}
+                    for v in bet.get("values", []):
+                        odd = _odd_value(v)
+                        if odd is not None:
+                            vals[v.get("value")] = odd
                     h_odd = vals.get("Home", 0)
                     d_odd = vals.get("Draw", 0)
                     a_odd = vals.get("Away", 0)
