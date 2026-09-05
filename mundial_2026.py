@@ -2423,6 +2423,9 @@ def predict_top_scorers(tournament_probs=None, n=20_000):
 
 def update_result(team_a, team_b, ga, gb, weight=0.32):
     """Bayesian-style parameter update after a real match result."""
+    if team_a == team_b:
+        raise ValueError("team_a and team_b must be different teams")
+
     lam_a, lam_b, _ = expected_goals(team_a, team_b)
     ra = ga / max(lam_a, 0.01)
     rb = gb / max(lam_b, 0.01)
