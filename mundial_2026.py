@@ -50,6 +50,7 @@ BASE_GOALS  = 1.33    # Average WC goals per team per game (2014–2022 avg)
 RHO         = -0.13   # Dixon-Coles low-score correlation
 N_SIMS      = 50_000  # Monte Carlo iterations
 STATE_FILE  = os.path.join(os.path.dirname(__file__), "wc2026_state.json")
+MAX_GOALS_PER_TEAM = 12  # Guard manual-result typos before they distort ratings.
 
 # ══════════════════════════════════════════════════════════════
 # 1. GROUP DRAW
@@ -2425,6 +2426,8 @@ def update_result(team_a, team_b, ga, gb, weight=0.32):
     """Bayesian-style parameter update after a real match result."""
     if team_a == team_b:
         raise ValueError("team_a and team_b must be different teams")
+    if ga > MAX_GOALS_PER_TEAM or gb > MAX_GOALS_PER_TEAM:
+        raise ValueError(f"goals must be <= {MAX_GOALS_PER_TEAM} per team")
 
     lam_a, lam_b, _ = expected_goals(team_a, team_b)
     ra = ga / max(lam_a, 0.01)
