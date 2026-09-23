@@ -147,6 +147,59 @@ def fetch_betting_odds(fixture_id: Optional[int] = None,
 _QUALIFY_KEYWORDS = ("qualif", "to advance", "advance", "to reach", "to win the tie")
 
 
+def _odds_label_matches_team(label: str, team: str) -> bool:
+    """Return whether a bookmaker value label names the requested model team."""
+    if not label or not team:
+        return False
+    label_norm = label.lower()
+    team_norm = team.lower()
+    if label_norm == team_norm:
+        return True
+    try:
+        import mundial_2026 as mdl
+        return mdl.find_team(label, quiet=True) == (mdl.find_team(team, quiet=True) or team)
+    except Exception:
+        return False
+
+
+def _resolve_two_way_odds(values: list[dict], home: str, away: str) -> tuple[float, float]:
+    entries = [
+        (str(v.get("value", "")).lower(), float(v["odd"]))
+        for v in values
+    ]
+
+    home_idx = next((i for i, (label, _) in enumerate(entries) if label == "home"), None)
+    away_idx = next((i for i, (label, _) in enumerate(entries) if label == "away"), None)
+
+    if home_idx is None:
+        home_idx = next(
+            (i for i, (label, _) in enumerate(entries)
+             if i != away_idx and _odds_label_matches_team(label, home)),
+            None,
+        )
+    if away_idx is None:
+        away_idx = next(
+            (i for i, (label, _) in enumerate(entries)
+             if i != home_idx and _odds_label_matches_team(label, away)),
+            None,
+        )
+
+    # If exactly one team label resolved, the other side is the remaining value.
+    if home_idx is None and away_idx is not None:
+        remaining = [i for i in range(len(entries)) if i != away_idx]
+        if len(remaining) == 1:
+            home_idx = remaining[0]
+    if away_idx is None and home_idx is not None:
+        remaining = [i for i in range(len(entries)) if i != home_idx]
+        if len(remaining) == 1:
+            away_idx = remaining[0]
+
+    if home_idx is None and away_idx is None:
+        home_idx, away_idx = 0, 1
+
+    return entries[home_idx][1], entries[away_idx][1]
+
+
 def list_odds_markets(fixture_id: int) -> list:
     """
     Probe: list every (bet_id, bet_name) market api-football offers for a fixture.
@@ -208,13 +261,9 @@ def fetch_qualify_odds(fixture_id: Optional[int] = None,
                     continue
                 if len(vals) != 2:
                     continue
-                # Two-way market: map by Home/Away label, else by order.
-                lut = {str(v.get("value", "")).lower(): float(v["odd"]) for v in vals}
-                h_odd = lut.get("home") or lut.get(home.lower())
-                a_odd = lut.get("away") or lut.get(away.lower())
-                if not (h_odd and a_odd):
-                    odds_in_order = [float(v["odd"]) for v in vals]
-                    h_odd, a_odd = odds_in_order[0], odds_in_order[1]
+                # Two-way market: map by Home/Away, canonical team labels, or
+                # finally by order when the market is unlabeled.
+                h_odd, a_odd = _resolve_two_way_odds(vals, home, away)
                 raw_h, raw_a = 1 / h_odd, 1 / a_odd
                 total = raw_h + raw_a
                 return {
