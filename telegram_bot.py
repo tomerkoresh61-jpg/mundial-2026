@@ -496,7 +496,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Simulate ───────────────────────────────────────────────
     if data == "simulate":
         await _edit(query, "🎲 מריץ 50,000 סימולציות... (כ-25 שניות)", None)
-        probs  = mdl.simulate_tournament()
+        probs  = await _run_model_job(mdl.simulate_tournament)
         ranked = sorted(probs.items(), key=lambda x: -x[1]["champion"])[:10]
         lines  = ["🏆 *סימולציית טורניר — 50K*\n"]
         for i, (t, p) in enumerate(ranked, 1):
@@ -508,8 +508,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Bonus ──────────────────────────────────────────────────
     if data == "bonus":
         await _edit(query, "🎲 מחשב אלוף + מלך שערים... (כ-35 שניות)", None)
-        probs   = mdl.simulate_tournament()
-        scorers = mdl.predict_top_scorers(probs)
+        probs, scorers = await _run_model_job(_build_bonus_predictions)
         ranked  = sorted(probs.items(), key=lambda x: -x[1]["champion"])
 
         champ        = ranked[0]
@@ -819,6 +818,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+async def _run_model_job(func, *args):
+    """Run CPU-heavy model work without freezing Telegram's asyncio loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
+
+
+def _build_bonus_predictions():
+    probs = mdl.simulate_tournament()
+    scorers = mdl.predict_top_scorers(probs)
+    return probs, scorers
+
+
 async def _edit(query, text: str, keyboard):
     try:
         await query.edit_message_text(
