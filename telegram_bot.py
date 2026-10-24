@@ -513,9 +513,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ranked  = sorted(probs.items(), key=lambda x: -x[1]["champion"])
 
         champ        = ranked[0]
-        top_scorer   = scorers[0]
-        scorer_team  = next(t for t, td in mdl.TEAMS.items()
-                            if top_scorer[0] in td["players"])
+        if scorers:
+            top_scorer  = scorers[0]
+            scorer_team = next(t for t, td in mdl.TEAMS.items()
+                               if top_scorer[0] in td["players"])
+            scorer_line = (
+                f"🥅 *מלך שערים:*  {top_scorer[0]}  "
+                f"({scorer_team}, {top_scorer[1]*100:.1f}%)\n\n"
+            )
+        else:
+            scorer_line = "🥅 *מלך שערים:*  לא זמין (אין שחקנים כשירים)\n\n"
 
         top5 = "\n".join(
             f"  {i}. {t} — {p['champion']*100:.1f}%"
@@ -524,8 +531,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"🏆 *ניחוש בונוס*\n\n"
             f"🥇 *אלוף:*  {champ[0]}  ({champ[1]['champion']*100:.1f}%)\n"
-            f"🥅 *מלך שערים:*  {top_scorer[0]}  "
-            f"({scorer_team}, {top_scorer[1]*100:.1f}%)\n\n"
+            f"{scorer_line}"
             f"*טופ 5 אלופות:*\n{top5}"
         )
         await _edit(query, text, kb_main())

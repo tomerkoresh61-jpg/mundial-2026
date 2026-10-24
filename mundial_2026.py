@@ -2400,6 +2400,10 @@ def predict_top_scorers(tournament_probs=None, n=20_000):
                 rate = pdata["goals_rate"] * (1 + form_bonus)
                 candidates.append((player, team, rate))
 
+    if not candidates:
+        print("  No available top-scorer candidates.")
+        return []
+
     for _ in range(n):
         pg = {}
         for player, team, rate in candidates:
@@ -2693,14 +2697,17 @@ def bonus_predictions():
         print(f"  {i:<4} {player:<26} {team:<16} {prob*100:>5.1f}%{avail}")
 
     best_team    = ranked[0]
-    best_scorer  = scorer_probs[0]
-    scorer_team  = next(t for t, td in TEAMS.items() if best_scorer[0] in td["players"])
 
     print(f"\n{'═'*68}")
     print(f"  📌  MODEL RECOMMENDATION:")
     print(f"       🏆 Champion    →  {best_team[0]}  ({best_team[1]['champion']*100:.1f}%)")
-    print(f"       🥅 Top scorer  →  {best_scorer[0]}  "
-          f"({scorer_team}, {best_scorer[1]*100:.1f}%)")
+    if scorer_probs:
+        best_scorer  = scorer_probs[0]
+        scorer_team  = next(t for t, td in TEAMS.items() if best_scorer[0] in td["players"])
+        print(f"       🥅 Top scorer  →  {best_scorer[0]}  "
+              f"({scorer_team}, {best_scorer[1]*100:.1f}%)")
+    else:
+        print("       🥅 Top scorer  →  unavailable (no eligible players)")
     print(f"{'═'*68}\n")
 
 
