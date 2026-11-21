@@ -2733,8 +2733,13 @@ def find_team(name, quiet=False):
     alias = TEAM_NAME_ALIASES.get(nl)
     if alias and alias in TEAMS:
         return alias
-    # substring fallback (accent-insensitive)
-    matches = [orig for n, orig in norm.items() if nl in n]
+    # Prefix fallback (accent-insensitive). Keep convenient partials like
+    # "Bosnia" or "Verde", but reject arbitrary substrings such as "rica"
+    # matching "South Africa" and corrupting manual updates.
+    matches = [
+        orig for n, orig in norm.items()
+        if n.startswith(nl) or any(part.startswith(nl) for part in n.split())
+    ]
     if len(matches) == 1: return matches[0]
     if len(matches) > 1:
         if not quiet: print(f"  ⚠️  Ambiguous: {matches}")
